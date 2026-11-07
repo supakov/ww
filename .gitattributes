@@ -1,0 +1,15 @@
+# Every text file is stored and checked out with LF line endings.
+* text=auto eol=lf
+
+# Windows scripts that a Windows tool reads need CRLF.
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# Binary files
+*.png binary
+*.ico binary
+*.jpg binary
+*.gif binary
+*.woff2 binary
+*.zip binary

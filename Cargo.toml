@@ -1,0 +1,37 @@
+# W# (ww): the framework of the window of WinWeaver, wedit and wview, and the system of their
+# plugins (wwrt, the stable interface wview.h and its crate wview-stable), with the examples of a
+# plugin (examples/). The programs take it as a git dependency of the branch main (README.md).
+[workspace]
+resolver = "3"
+members = ["crates/ww-base", "crates/ww", "crates/wwrt", "stable/rust", "examples/wv-hello"]
+
+[workspace.package]
+version = "0.44.0"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT"
+repository = "https://github.com/supakov/ww"
+authors = ["digidult"]
+publish = false
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+thiserror = "2"
+
+# wwrt is a Rust dylib (docs/plugins.md): no LTO, which rustc runs for executables, cdylibs and
+# static libraries alone. The profiles of a dependency are not the ones of a program: each program
+# names its own.
+[profile.release]
+lto = false
+codegen-units = 1
+strip = true
+
+# A debug build keeps the dependencies and the runtime optimized: at opt-level 2 a crate exports no
+# shared instances of generic functions, which put 128973 symbols into a debug wwrt.dll, twice the
+# 65535 a DLL holds (docs/plugins.md).
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.dev.package.wwrt]
+opt-level = 2

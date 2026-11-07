@@ -1,0 +1,53 @@
+[package]
+name = "wwrt"
+description = "The runtime of the programs with plugins: W#, egui and the interface of the plugins in one DLL"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+# A Rust dylib: one copy of std, egui and W# for the executable and every plugin (docs/plugins.md).
+crate-type = ["dylib"]
+
+[features]
+# egui_kittest for the tests of a window (wview, a plugin): a dev-dependency of their own on it would
+# bring a second egui, so it comes through wwrt as `wwrt::egui_kittest`.
+kittest = ["dep:egui_kittest"]
+
+[dependencies]
+ww = { path = "../ww" }
+egui_kittest = { version = "0.36", features = ["eframe", "wgpu", "snapshot"], optional = true }
+libloading = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# The decoders of the formats WIC may lack, for the plugin of images (wwrt::image), all of Rust;
+# eframe takes the crate already for PNG and BMP.
+image = { version = "0.25", default-features = false, features = ["webp", "tga", "pnm", "qoi", "hdr", "ff"] }
+# The SHA-256 of a plugin (wwrt::trust) and of what a plugin hashes (wwrt::sha2).
+sha2 = "0.10"
+
+[target.'cfg(windows)'.dependencies]
+# Re-exported for the plugins (wwrt::windows): WIC of the images with their metadata (a
+# PROPVARIANT), the folder of a plugin's DLL, the console of the command line; the Authenticode
+# signature of a plugin (WinVerifyTrust).
+windows = { version = "0.62.2", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Imaging",
+    "Win32_Security_Cryptography",
+    "Win32_Security_Cryptography_Catalog",
+    "Win32_Security_Cryptography_Sip",
+    "Win32_Security_WinTrust",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Console",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Variant",
+] }
+# The error mode of the thread while a plugin loads (no dialog of Windows for a missing import).
+windows-sys = { version = "0.61", features = ["Win32_System_Diagnostics_Debug"] }
+
+[dev-dependencies]
+# A plugin of the stable interface written with the crate, wrapped by this host in the tests.
+wview-stable = { path = "../../stable/rust" }

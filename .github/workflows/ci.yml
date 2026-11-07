@@ -1,0 +1,72 @@
+name: CI
+
+# CI runs on demand alone, with the word of the user (AGENTS.md, section 4): the checks on Linux
+# for Windows first, then the tests on Windows, the template of a native plugin and the example of
+# the stable interface built by the compiler of Visual Studio. checks=false leaves out the Linux job
+# (its checks ran on the computer of the developer).
+on:
+  workflow_dispatch:
+    inputs:
+      checks:
+        description: "Run the Linux checks first (format, clippy for Windows)"
+        type: boolean
+        default: true
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: Format and clippy (Linux, for Windows)
+    if: inputs.checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: x86_64-pc-windows-gnu, wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Format check
+        run: cargo fmt --all --check
+      - name: Clippy (the workspace, checked for Windows)
+        run: cargo clippy --workspace --all-targets --target x86_64-pc-windows-gnu -- -D warnings
+      - name: Clippy of W# for the browser
+        run: cargo clippy -p ww --no-default-features --features glow --target wasm32-unknown-unknown -- -D warnings
+      - name: Tests of ww-base
+        run: cargo test -p ww-base
+
+  windows:
+    name: Tests and the examples (Windows)
+    needs: check
+    if: ${{ !cancelled() && needs.check.result != 'failure' }}
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Tests
+        run: cargo test --workspace
+      - name: The template of a native plugin, in release
+        run: cargo build --release -p wv-hello
+      - name: The example of the stable interface, built with the compiler of Visual Studio
+        # A plugin in C: no part of Rust, so any host of the stable interface loads it. The CRT is
+        # linked in (/MT), so it needs no DLL of the Visual C++ runtime.
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          $vcvars = Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat'
+          $out = Join-Path $env:RUNNER_TEMP 'stable'
+          New-Item -ItemType Directory -Force $out | Out-Null
+          cmd /c "`"$vcvars`" >nul && cl /nologo /LD /O2 /MT /W3 /std:c11 /I stable examples\wv-mandelbrot\mandelbrot.c /Fo$out\ /Fe$out\wv_mandelbrot.dll"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-ChildItem $out | Select-Object Length, Name | Format-Table -AutoSize

@@ -1,0 +1,92 @@
+//! The icons of the window, each named once: the command bar, the tabs, the rows of the chrome
+//! and the views draw them by name.
+//!
+//! A page in a browser has only the fonts of egui (Ubuntu Light, Noto Emoji and its icon font),
+//! which draw the arrows, the small triangles and the light cross of Segoe UI as an empty box:
+//! a build for wasm32 takes signs those fonts have for them.
+
+pub const NEW: &str = "\u{1F4C4}";
+pub const OPEN: &str = "\u{1F4C2}";
+pub const SAVE: &str = "\u{1F4BE}";
+pub const CHECK: &str = "\u{2714}";
+pub const ONLY_ON: &str = "\u{2611}";
+pub const GEAR: &str = "\u{2699}";
+pub const HAMMER: &str = "\u{1F528}";
+pub const THIS_PC: &str = "\u{1F5A5}";
+pub const COMPARE: &str = "\u{21C6}";
+pub const PACKAGE: &str = "\u{1F4E6}";
+pub const START: &str = "\u{25B6}";
+pub const STOP: &str = "\u{25A0}";
+pub const IMPORT: &str = "\u{1F4E5}";
+pub const EXPORT: &str = "\u{1F4E4}";
+pub const EDIT: &str = "\u{270F}";
+pub const RENAME: &str = "\u{1F3F7}";
+pub const SHOW: &str = "\u{27A1}";
+pub const FOLDER: &str = "\u{1F4C1}";
+pub const ADD: &str = "\u{2795}";
+pub const DELETE: &str = "\u{1F5D1}";
+pub const REGISTRY: &str = "\u{1F5C2}";
+pub const DUPLICATE: &str = "\u{29C9}";
+#[cfg(not(target_arch = "wasm32"))]
+pub const UP: &str = "\u{2191}";
+#[cfg(target_arch = "wasm32")]
+pub const UP: &str = "\u{2B06}";
+#[cfg(not(target_arch = "wasm32"))]
+pub const DOWN: &str = "\u{2193}";
+#[cfg(target_arch = "wasm32")]
+pub const DOWN: &str = "\u{2B07}";
+pub const UNLOCKED: &str = "\u{1F513}";
+pub const KEY: &str = "\u{1F511}";
+pub const MASTER_KEY: &str = "\u{1F510}";
+pub const LOCKED: &str = "\u{1F512}";
+pub const SCRIPT: &str = "\u{1F4DC}";
+pub const REFRESH: &str = "\u{21BB}";
+pub const STAR: &str = "\u{2605}";
+pub const STAR_EMPTY: &str = "\u{2606}";
+pub const FIND: &str = "\u{1F50D}";
+pub const BOOK: &str = "\u{1F4D6}";
+pub const LINK: &str = "\u{1F517}";
+pub const PALETTE: &str = "\u{1F3A8}";
+pub const PAGE: &str = "\u{1F4C3}";
+/// A profile of an installation: the disc of the media, apart from the gear of the settings.
+pub const PROFILE: &str = "\u{1F4BF}";
+pub const PEOPLE: &str = "\u{1F465}";
+pub const PERSON: &str = "\u{1F464}";
+pub const GLOBE: &str = "\u{1F310}";
+pub const CLIPBOARD: &str = "\u{1F4CB}";
+pub const SELECT_ALL: &str = "\u{1F533}";
+pub const RECENT: &str = "\u{1F552}";
+pub const BOOKS: &str = "\u{1F4DA}";
+pub const LICENSE: &str = "\u{2696}";
+pub const INFO: &str = "\u{2139}";
+pub const EXIT: &str = "\u{1F6AA}";
+pub const UNDO: &str = "\u{21A9}";
+pub const ARCHIVE: &str = "\u{1F5DC}";
+pub const COPY_ALL: &str = "\u{1F4D1}";
+pub const GO_TO: &str = "\u{2197}";
+#[cfg(not(target_arch = "wasm32"))]
+pub const FOLDED: &str = "\u{25B8}";
+#[cfg(target_arch = "wasm32")]
+pub const FOLDED: &str = "\u{23F5}";
+#[cfg(not(target_arch = "wasm32"))]
+pub const UNFOLDED: &str = "\u{25BE}";
+#[cfg(target_arch = "wasm32")]
+pub const UNFOLDED: &str = "\u{23F7}";
+pub const BULLET: &str = "\u{2022}";
+pub const ELLIPSIS: &str = "\u{2026}";
+pub const CRUMB: &str = "\u{203A}";
+#[cfg(not(target_arch = "wasm32"))]
+pub const BACK: &str = "\u{2190}";
+#[cfg(target_arch = "wasm32")]
+pub const BACK: &str = "\u{2B05}";
+#[cfg(not(target_arch = "wasm32"))]
+pub const FORWARD: &str = "\u{2192}";
+#[cfg(target_arch = "wasm32")]
+pub const FORWARD: &str = "\u{27A1}";
+pub const MENU: &str = "\u{2630}";
+pub const WARNING: &str = "\u{26A0}";
+pub const ERROR: &str = "\u{26D4}";
+#[cfg(not(target_arch = "wasm32"))]
+pub const CLOSE: &str = "\u{2715}";
+#[cfg(target_arch = "wasm32")]
+pub const CLOSE: &str = "\u{1F5D9}";

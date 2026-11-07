@@ -1,0 +1,65 @@
+[package]
+name = "ww"
+description = "WW (W#): a window with tabs for programs that analyse and manage a system; the style, the themes, the translations, the painted tree and list, the settings and the session"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[features]
+default = ["glow", "wgpu"]
+# The renderers of the window (src/renderer.rs): OpenGL through glow, DirectX 12 through wgpu with that
+# backend only. At least one is needed; the settings and --renderer offer the ones built in.
+glow = ["eframe/glow"]
+wgpu = ["eframe/wgpu_no_default_features", "dep:wgpu"]
+
+[dependencies]
+ww-base = { path = "../ww-base" }
+eframe = { version = "0.36", default-features = false, features = ["accesskit", "default_fonts", "links"] }
+# The DirectX 12 backend of wgpu alone: no Vulkan, no OpenGL through wgpu (glow draws OpenGL).
+wgpu = { version = "30", default-features = false, features = ["dx12"], optional = true }
+# The parser of the Markdown pages; WW draws them itself (src/markdown.rs).
+pulldown-cmark = { version = "0.13", default-features = false }
+rfd = "0.17"
+raw-window-handle = "0.6"
+serde.workspace = true
+serde_json.workspace = true
+
+# A browser (the web edition of a program): the storage of the page, downloads and the console
+# (src/store.rs), the canvas and the log of the start (src/web.rs), the files of the page read as
+# tasks (src/shell/mod.rs). eframe brings the same crates for this target.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = [
+    "Blob",
+    "BlobPropertyBag",
+    "Document",
+    "Element",
+    "HtmlAnchorElement",
+    "HtmlCanvasElement",
+    "HtmlElement",
+    "Node",
+    "Storage",
+    "Url",
+    "Window",
+    "console",
+] }
+log = "0.4"
+
+[target.'cfg(windows)'.dependencies]
+# The colours of the title bar (src/shell/theme.rs).
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Dwm"] }
+# The icons in colour (src/coloricons.rs): DirectWrite draws them through Direct2D into WIC.
+windows = { version = "0.62.2", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct2D",
+    "Win32_Graphics_Direct2D_Common",
+    "Win32_Graphics_DirectWrite",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Imaging",
+    "Win32_System_Com",
+] }

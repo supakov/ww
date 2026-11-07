@@ -1,0 +1,29 @@
+{
+  "format": "winweaver-theme",
+  "version": 1,
+  "name": "Dark",
+  "dark": true,
+  "font": "Segoe UI",
+  "font_size": 13.0,
+  "mono_font": "Consolas",
+  "colors": {
+    "accent": "#4cc2ff",
+    "bg": "#202020",
+    "border": "#3b3b3b",
+    "card": "#2b2b2b",
+    "card2": "#272727",
+    "check": "#4cc2ff",
+    "check_mark": "#ffffff",
+    "hover": "#353535",
+    "msg_bg": "#433418",
+    "msg_border": "#5c4620",
+    "msg_fg": "#ffd9a0",
+    "muted": "#a3a3a3",
+    "off": "#7a7a7a",
+    "ok": "#6ccb5f",
+    "sel": "#2f4257",
+    "sel_text": "#f0f0f0",
+    "text": "#f0f0f0",
+    "warn": "#ffb15c"
+  }
+}

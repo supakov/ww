@@ -1,0 +1,16 @@
+[package]
+name = "ww-base"
+description = "WW (W#) base: strict JSON files with the trait Document, paths inside the program folder, the clock"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+# The clock: std::time natively, the clock of the browser on wasm32, where std::time panics.
+web-time = "1"

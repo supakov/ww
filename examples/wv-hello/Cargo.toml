@@ -1,0 +1,21 @@
+[package]
+name = "wv-hello"
+description = "The template of a native plugin of wview: the SDK copies it for a plugin of one's own"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[features]
+# The plugin as a library without the exports of a DLL, for the tests of a program
+# (`wwrt::plugin!`).
+library = []
+
+[dependencies]
+# wwrt alone: every crate the plugin shares with wview comes through it (wwrt::egui, wwrt::ww,
+# wwrt::serde); a dependency of its own on one of them would not load.
+wwrt = { path = "../../crates/wwrt" }

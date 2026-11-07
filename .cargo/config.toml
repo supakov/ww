@@ -1,0 +1,9 @@
+# The family of the plugins links std dynamically (std-<hash>.dll of the toolchain): wwrt.dll, a
+# program and its plugins share one std, since a crate may be in the process once
+# (docs/plugins.md). For msvc every module takes the CRT statically, so none imports
+# VCRUNTIME140.dll, which a clean Windows may lack. The tests of this workspace link the same way.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "prefer-dynamic", "-C", "target-feature=+crt-static"]
+
+[target.x86_64-pc-windows-gnu]
+rustflags = ["-C", "prefer-dynamic"]
