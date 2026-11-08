@@ -8,6 +8,8 @@ pub const SNIFFED: usize = 512;
 
 /// The type of a portable executable (an exe, a DLL).
 pub const PE: &str = "application/vnd.microsoft.portable-executable";
+/// Any bytes: the type of the plugin a file no other plugin opens falls back to.
+pub const OCTET: &str = "application/octet-stream";
 
 /// The spellings of a type that differ, each with the one used here.
 const ALIASES: [(&str, &str); 11] = [
@@ -86,7 +88,7 @@ pub fn fallbacks(mime: &str) -> Vec<&'static str> {
 /// The type of common files by their first bytes (`SNIFFED` of them, or all a shorter part
 /// has): PNG, JPEG, GIF, BMP, ICO, TIFF, WebP, QOI, farbfeld, Radiance HDR, Netpbm, a portable
 /// executable, ZIP, PDF, and texts of
-/// UTF-8 or UTF-16 (with or without a mark) as XML, HTML or plain text. A text of UTF-16 without
+/// UTF-8 or UTF-16 (with or without a mark) as XML, HTML, JSON or plain text. A text of UTF-16 without
 /// its mark says so in its `charset`.
 pub fn sniff(bytes: &[u8]) -> Option<&'static str> {
     let bytes = &bytes[..bytes.len().min(SNIFFED)];
@@ -181,6 +183,7 @@ fn text(bytes: &[u8]) -> Option<&'static str> {
             return Some(match kind_of(&text) {
                 "application/xml" => "application/xml; charset=utf-16le",
                 "text/html" => "text/html; charset=utf-16le",
+                "application/json" => "application/json; charset=utf-16le",
                 _ => "text/plain; charset=utf-16le",
             });
         }
@@ -188,6 +191,7 @@ fn text(bytes: &[u8]) -> Option<&'static str> {
             return Some(match kind_of(&text) {
                 "application/xml" => "application/xml; charset=utf-16be",
                 "text/html" => "text/html; charset=utf-16be",
+                "application/json" => "application/json; charset=utf-16be",
                 _ => "text/plain; charset=utf-16be",
             });
         }
@@ -240,13 +244,25 @@ fn utf16(bytes: &[u8], big: bool) -> Option<String> {
     (!text.is_empty()).then_some(text)
 }
 
-/// XML, HTML or plain text, by the start of a text.
+/// XML, HTML, JSON or plain text, by the start of a text: JSON an object, or an array whose
+/// first item is a value of JSON (a `[section]` of an INI or TOML file is a text).
 fn kind_of(text: &str) -> &'static str {
     let start = text.trim_start().to_ascii_lowercase();
+    let json = start.starts_with('{')
+        || start.strip_prefix('[').is_some_and(|rest| {
+            let rest = rest.trim_start();
+            rest.is_empty()
+                || rest.starts_with(|c: char| "{[\"]-0123456789".contains(c))
+                || ["true", "false", "null"]
+                    .iter()
+                    .any(|w| rest.starts_with(w))
+        });
     if start.starts_with("<?xml") {
         "application/xml"
     } else if start.starts_with("<!doctype html") || start.starts_with("<html") {
         "text/html"
+    } else if json {
+        "application/json"
     } else {
         "text/plain"
     }
@@ -323,6 +339,13 @@ mod tests {
         let plain: Vec<u8> = "name".encode_utf16().flat_map(u16::to_be_bytes).collect();
         assert_eq!(sniff(&plain), Some("text/plain; charset=utf-16be"));
         assert_eq!(sniff(b"one\0two"), None, "a zero byte is no text of UTF-8");
+        assert_eq!(sniff(b"  {\"a\": 1}"), Some("application/json"));
+        assert_eq!(sniff(b"[1, 2]"), Some("application/json"));
+        assert_eq!(
+            sniff(b"[section]\nkey = 1"),
+            Some("text/plain"),
+            "an INI or TOML"
+        );
     }
 
     #[test]

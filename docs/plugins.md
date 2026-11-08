@@ -178,8 +178,9 @@ draws the same views with the same egui, without a screen.
 
 ### 6.1 The interface
 
-Version 2 (`wwrt::plugin::API`; version 1 had no MIME types, no menus and no bytes in memory,
-and a plugin of version 1 is refused by its build, `ABI`):
+Version 3 (`wwrt::plugin::API`; version 2 had no context of a view, no bytes offered and no
+Open with, version 1 no MIME types, no menus and no bytes in memory; a plugin of an older
+version is refused by its build, `ABI`):
 
 - `Plugin`: `name`, `formats` (each its name, its extensions and its MIME types), `open` of a path
   with the settings of the plugin, `open_bytes` of some bytes in memory under a name and a MIME
@@ -188,13 +189,34 @@ and a plugin of version 1 is refused by its build, `ABI`):
   window, answered with a `Host` for their requests), `translations` (the code and a file of each
   language, added to the window at the load by `ww::i18n::add`), `has_settings` and `settings_ui`
   (its card in Settings, Plugins; the host keeps the JSON object of each plugin in its settings by
-  the name of the DLL; `plugin::setting` and `set_setting` read and write a field).
+  the name of the DLL; `plugin::setting` and `set_setting` read and write a field), `open_as`
+  (the file as a MIME type of its formats whatever its name, for Open with: any file as its
+  bytes, a text of any name as a text; `open` by default, and `open` again for an empty type)
+  and `opens_bytes` (whether `open_bytes` opens anything, so that Open with offers its formats
+  for bytes).
 - `View`: `ui` with a `Host` (Wrap lines, the width of pages, the settings of the plugin, the
   plugins of the window with the settings of each, the depth of the view, and the requests of the
   view: `Browse` a step through the folder, `Status` a line of the status bar, `Open` a file in a
-  tab, `OpenBytes` some bytes in a tab of their own), `tools` (the bar of the tab) and `menu`
-  (items in the menu of the window while its tab is in front), both answered by `act` with the
-  host, `search`, `browses` (Previous and Next in the bar), `status`.
+  tab, `OpenBytes` some bytes in a tab of their own by the plugin of their type, `OpenWith` some
+  bytes by a plugin chosen as a type of its formats), `tools` (the bar of the tab; `pressed`
+  names the ones that are a switch on, drawn pressed), `menu` (items in the menu of the window
+  while its tab is in front) and `context` (the commands of its selection or its cursor, in its
+  context menu and in a submenu of the window), all answered by `act` with the host, `offer`
+  and `offered` (the bytes the view offers to the other plugins: their name, their MIME type
+  when it knows one, and the bytes), `search`, `browses` (Previous and Next in the bar),
+  `status`.
+- **The menus of a view** (`wwrt::menus`): `context` draws the context menu of a view on the
+  response of a part of its area (`input::area` gives one; `ww::tree::show_with_menu` calls a
+  closure for a row of a tree, after a click of the secondary button selected it) and answers
+  what is picked at once: an item of `View::context` by `act`, a choice of Open with by
+  `open_offered`, whose `Request::OpenWith` the host opens in a tab. `items` draws the same
+  items for the submenu of the window, which answers the `Picked` itself. Open with lists
+  `Choice`s, a plugin and a format of it: `Plugins::choices_for_bytes` the formats of every
+  plugin that opens bytes, the ones of the type of the bytes and of the types it falls back to
+  first, marked found and drawn in the colour of the accent, then under Try as every other; a
+  plugin of texts so opens the bytes of any part of a file as a text.
+  `Plugins::choices_for_file` does the same for a file by its extension and its first bytes,
+  opened by `Plugin::open_as`.
 - **Views inside a view** (`wwrt::inner`): `Host::opens` says whether a plugin of the window opens
   bytes of a MIME type, and `Host::open_inside` gives an `Inner`, the view of the first plugin of
   the type that opens them, which the view keeps and draws in a part of its area (`Inner::ui`): a
@@ -208,15 +230,19 @@ and a plugin of version 1 is refused by its build, `ABI`):
   (`ui.make_persistent_id`; `ww::widgets::side_panel` takes one), never with global ones.
 - **MIME types** (`wwrt::mime`): `sniff` names the type of the first 512 bytes (PNG, JPEG, GIF,
   BMP, ICO, TIFF, WebP, a portable executable, ZIP, PDF, and texts of UTF-8 or UTF-16 with or
-  without a mark as XML, HTML or plain text, UTF-16 without a mark in its `charset`); `canonical`
+  without a mark as XML, HTML, JSON (an object, or an array of a value of JSON; a `[section]`
+  is a text) or plain text, UTF-16 without a mark in its `charset`); `canonical`
   makes the spellings of a type one (`image/ico`, `image/vnd.microsoft.icon` and `image/x-icon`,
   `text/xml` and `application/xml`); `fallbacks` gives the types a textual one falls back to when
   no plugin names it (a type of `+xml` to `application/xml`, then every text, JSON and script to
   `text/plain`). `Plugins::for_mime` lists the plugins of a type in that order and
   `Plugins::open_bytes` tries them in turn.
-- **A file by what it holds** (`Plugins::for_file`): the plugin of its extension, else the first
-  of the MIME type of its first bytes, so that a file of another extension or of none opens (a
-  text, an image, a program); the window opens every file so, the command line `--probe` too.
+- **A file by what it holds** (`Plugins::all_for_file`, the first of them `for_file`): the
+  plugins of its extension, then the ones of the MIME type of its first bytes, so that a file of
+  another extension or of none opens (a text, an image, a program), then the ones of any bytes
+  (`mime::OCTET`, `application/octet-stream`), which every file no other plugin opens falls
+  back to; a host tries them in turn and keeps the reason of the first. The window opens every
+  file so, the command line `--probe` too.
 - **Where a plugin comes from** (`wwrt::trust`): the SHA-256 of every DLL of the folder and its
   Authenticode signature embedded in the file, judged by `WinVerifyTrust` without the network (no
   revocation; a signature of a catalog of Windows is not looked at), with the name of its signer.
@@ -232,10 +258,14 @@ and a plugin of version 1 is refused by its build, `ABI`):
 - `wwrt::testing`: the texts of the sources of a plugin and the ones its translations lack.
 
 The window keeps a tab of bytes without a path under their name, lists the MIME types of every
-format on the page of the plugins, and holds in its menu the items of the view in front after
-Close tab and a submenu of each plugin that has items before Plugins. The template `wv-hello`
-has every part once: a MIME type, bytes in memory, an item of the plugin (Say hello, a line of
-the status bar) and two of its view (Bigger, Smaller).
+format on the page of the plugins, draws the switches of the bar pressed, puts Open with in the
+bar of a view that offers bytes, and holds in its menu the items of the view in front after
+Close tab, the context of the view in a submenu Context menu, Open the file with (a new tab of
+the file by the plugin and the format chosen) and a submenu of each plugin that has items
+before Plugins. The template `wv-hello` has every part once: a MIME type, bytes in memory, an
+item of the plugin (Say hello, a line of the status bar), two of its view (Bigger, Smaller), a
+switch of the bar (Frame), the context menu of its view and its text offered as
+`text/plain`.
 
 ### 6.7 Plugins of others: the hybrid
 

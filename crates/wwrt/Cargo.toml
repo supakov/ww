@@ -27,6 +27,11 @@ serde_json = "1"
 image = { version = "0.25", default-features = false, features = ["webp", "tga", "pnm", "qoi", "hdr", "ff"] }
 # The SHA-256 of a plugin (wwrt::trust) and of what a plugin hashes (wwrt::sha2).
 sha2 = "0.10"
+# The parsers of the plugin of the texts of a tree (wwrt::toml_edit, wwrt::quick_xml): TOML with
+# its comments and its layout, XML as its events. A plugin takes them from here: they share
+# indexmap and memchr with the crates above.
+toml_edit = { version = "0.23", default-features = false, features = ["parse", "display"] }
+quick-xml = "0.38"
 
 [target.'cfg(windows)'.dependencies]
 # Re-exported for the plugins (wwrt::windows): WIC of the images with their metadata (a

@@ -3,14 +3,16 @@
 //! size, a drag and the arrows move it, a double click and 0 put it back. Its setting: the colour
 //! of the text. Every part a plugin has is here once: the formats with their MIME type, bytes in
 //! memory (a hello inside another file), the view with the keys and the mouse, the cursor, a
-//! command of the bar, the items of the menu of the plugin and of the view, a setting, the status
-//! bar and the translations.
+//! command of the bar and a switch of it, the items of the menu of the plugin and of the view, the
+//! context menu of the view, its text offered to the other plugins (Open with), a setting, the
+//! status bar and the translations.
 
 use std::path::Path;
 
 use wwrt::egui::{self, Align2, Key, Vec2};
 use wwrt::input::{self, Cursor};
-use wwrt::plugin::{Format, Host, Plugin, Request, Tool, View, set_setting, setting};
+use wwrt::menus;
+use wwrt::plugin::{Format, Host, Offer, Plugin, Request, Tool, View, set_setting, setting};
 use wwrt::serde_json::Value;
 use wwrt::ww::i18n::{tr, trf};
 use wwrt::ww::style;
@@ -54,6 +56,7 @@ fn hello(text: &str) -> Box<dyn View> {
         text: text.to_owned(),
         size: SIZE,
         offset: Vec2::ZERO,
+        framed: false,
     })
 }
 
@@ -75,6 +78,10 @@ impl Plugin for HelloPlugin {
         }
         let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
         Ok(hello(&text))
+    }
+
+    fn opens_bytes(&self) -> bool {
+        true
     }
 
     /// A hello of bytes in memory, a part of another file shown inside its view.
@@ -132,6 +139,8 @@ struct HelloView {
     size: f32,
     /// Where the text is from the centre of the view, in points.
     offset: Vec2,
+    /// A frame around the text: the switch of the bar.
+    framed: bool,
 }
 
 impl HelloView {
@@ -146,7 +155,9 @@ impl View for HelloView {
         let accent: bool = setting(host.settings, "accent", true);
         egui::CentralPanel::default().show(ui, |ui| {
             let rect = ui.max_rect();
-            let (_, input) = input::area(ui, ui.id().with("hello"), rect, &KEYS);
+            let (response, input) = input::area(ui, ui.id().with("hello"), rect, &KEYS);
+            // The context menu of the view on its area: its items and Open with for its text.
+            menus::context(&response, self, host);
             for (key, _) in &input.keys {
                 match key {
                     Key::Plus | Key::Equals => self.size = (self.size * 1.2).min(400.0),
@@ -176,22 +187,58 @@ impl View for HelloView {
             } else {
                 ui.visuals().text_color()
             };
-            ui.painter_at(rect).text(
+            let painter = ui.painter_at(rect);
+            let shown = painter.text(
                 rect.center() + self.offset,
                 Align2::CENTER_CENTER,
                 &self.text,
                 style::font(ui, self.size),
                 colour,
             );
+            if self.framed {
+                let stroke = egui::Stroke::new(2.0, colour);
+                painter.rect_stroke(shown.expand(8.0), 6, stroke, egui::StrokeKind::Outside);
+            }
         });
     }
 
     fn tools(&self) -> Vec<Tool> {
-        vec![Tool {
-            id: "reset",
-            icon: "\u{21BA}",
-            label: "Reset",
-        }]
+        vec![
+            Tool {
+                id: "reset",
+                icon: "\u{21BA}",
+                label: "Reset",
+            },
+            Tool {
+                id: "frame",
+                icon: "\u{25A2}",
+                label: "Frame",
+            },
+        ]
+    }
+
+    /// The switch of the bar, drawn pressed while it is on.
+    fn pressed(&self, id: &str) -> bool {
+        id == "frame" && self.framed
+    }
+
+    /// The items of the context menu of the view and of its submenu in the window.
+    fn context(&self) -> Vec<Tool> {
+        let mut items = self.menu();
+        items.extend(self.tools().into_iter().take(1));
+        items
+    }
+
+    /// The text of the hello, which a plugin of texts opens.
+    fn offer(&self) -> Option<Offer> {
+        Some(Offer {
+            name: self.text.clone(),
+            mime: Some("text/plain".to_owned()),
+        })
+    }
+
+    fn offered(&mut self) -> Result<Vec<u8>, String> {
+        Ok(self.text.as_bytes().to_vec())
     }
 
     /// Items of the view in the menu of the window, answered by `act` as the tools are.
@@ -213,6 +260,7 @@ impl View for HelloView {
     fn act(&mut self, id: &str, _host: &mut Host) {
         match id {
             "reset" => self.reset(),
+            "frame" => self.framed = !self.framed,
             "bigger" => self.size = (self.size * 1.2).min(400.0),
             "smaller" => self.size = (self.size / 1.2).max(8.0),
             _ => {}
@@ -254,8 +302,14 @@ mod tests {
             )
             .unwrap();
         assert!(view.menu().iter().any(|t| t.id == "bigger"));
+        assert!(view.context().iter().any(|t| t.id == "reset"));
         view.act("bigger", &mut host);
         assert!(view.status().starts_with("58 points"), "{}", view.status());
+        assert!(!view.pressed("frame"));
+        view.act("frame", &mut host);
+        assert!(view.pressed("frame"), "the switch is on");
+        assert_eq!(view.offered().unwrap(), b"Hi there");
+        assert!(plugin.opens_bytes());
         let big = vec![b'x'; MAX_BYTES as usize + 1];
         assert!(plugin.open_bytes("b", "", big, &settings).is_err());
     }

@@ -6,7 +6,7 @@ resolver = "3"
 members = ["crates/ww-base", "crates/ww", "crates/wwrt", "stable/rust", "examples/wv-hello"]
 
 [workspace.package]
-version = "0.1.45"
+version = "0.1.46"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT"

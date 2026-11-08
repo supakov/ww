@@ -2,6 +2,8 @@
 //! painted in the look of the window, one stop of the Tab key for the whole tree and the keys
 //! inside it: the arrows, Home and End, Page Up and Page Down, Space for the check box, Enter for
 //! a group. A click on a row gives the tree the keyboard focus, so the keys go on from there.
+//! `show_with_menu` adds a context menu: a click of the secondary button on a row selects it and
+//! opens the menu a closure draws for its key.
 
 use eframe::egui::{
     self, Align, Align2, Color32, CornerRadius, Key, Modifiers, Rect, Sense, Shape, Stroke,
@@ -299,6 +301,33 @@ pub fn show<K: Clone>(
     selected: Option<usize>,
     scroll: Scroll,
 ) -> Output<K> {
+    draw(ui, id, rows, selected, scroll, None)
+}
+
+/// The closure that draws the context menu of a row of a tree for its key.
+pub type RowMenu<'a, K> = &'a mut dyn FnMut(&mut egui::Ui, &K);
+
+/// The tree with a context menu: a click of the secondary button on a row selects it (an
+/// `Event::Select`) and opens the menu `menu` draws for its key, as long as it stays open.
+pub fn show_with_menu<K: Clone>(
+    ui: &mut egui::Ui,
+    id: egui::Id,
+    rows: &[Row<K>],
+    selected: Option<usize>,
+    scroll: Scroll,
+    menu: RowMenu<'_, K>,
+) -> Output<K> {
+    draw(ui, id, rows, selected, scroll, Some(menu))
+}
+
+fn draw<K: Clone>(
+    ui: &mut egui::Ui,
+    id: egui::Id,
+    rows: &[Row<K>],
+    selected: Option<usize>,
+    scroll: Scroll,
+    mut menu: Option<RowMenu<'_, K>>,
+) -> Output<K> {
     let p = style::palette(ui);
     let mut out = Output {
         events: Vec::new(),
@@ -465,6 +494,15 @@ pub fn show<K: Clone>(
                 }
                 if response.clicked() || handled {
                     take_focus = true;
+                }
+                if let Some(menu) = menu.as_mut() {
+                    if response.secondary_clicked() {
+                        if !is_selected {
+                            out.events.push(Event::Select(row.key.clone()));
+                        }
+                        take_focus = true;
+                    }
+                    response.context_menu(|ui| menu(ui, &row.key));
                 }
             }
         });

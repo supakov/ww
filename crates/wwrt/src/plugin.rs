@@ -4,6 +4,11 @@
 //! view can show some of its bytes with the plugin of their type inside itself
 //! (`Host::open_inside`, `crate::inner`).
 //!
+//! A view offers some of its bytes to the other plugins (`View::offer`) and has a context of
+//! commands (`View::context`), both in the menus `crate::menus` draws: the context menu of the
+//! view, its copy in the menu of the window, and Open with, which opens the bytes or a file
+//! with the plugin of any type (`Plugin::open_as`).
+//!
 //! A plugin is a `cdylib` crate that depends on wwrt alone, implements `Plugin` and `View` and
 //! names its plugin with `wwrt::plugin!`. The host loads every DLL of the folder
 //! (`Plugins::load_dir`), checks that it was built with this runtime (`ABI`), adds its
@@ -23,7 +28,7 @@ use crate::trust::{self, Origin, Trust};
 
 /// The version of this interface: the traits and the types of this module. A change of them
 /// that an older plugin cannot follow takes the next number (`ABI` names it too).
-pub const API: u32 = 2;
+pub const API: u32 = 3;
 
 /// The build of this runtime: its version, the interface, the compiler, the target and the
 /// profile (`build.rs`), nul-terminated. A plugin carries the one it was built against (`plugin!`),
@@ -31,7 +36,7 @@ pub const API: u32 = 2;
 pub const ABI: &str = concat!(
     "wwrt ",
     env!("CARGO_PKG_VERSION"),
-    "; interface 2; ",
+    "; interface 3; ",
     env!("WWRT_BUILD"),
     "\0"
 );
@@ -81,6 +86,22 @@ pub enum Request {
         mime: String,
         bytes: Vec<u8>,
     },
+    /// Bytes in a tab of their own under a name, by a plugin chosen (its index among the plugins
+    /// of the window) as a MIME type of its formats: a choice of Open with (`crate::menus`).
+    OpenWith {
+        name: String,
+        plugin: usize,
+        mime: String,
+        bytes: Vec<u8>,
+    },
+}
+
+/// The bytes a view offers to the other plugins (`View::offer`): their name, for the tab they
+/// open in, and their MIME type when the view knows it or found it in them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Offer {
+    pub name: String,
+    pub mime: Option<String>,
 }
 
 /// What the host lends a view to draw with: the settings of the window that concern a view, the
@@ -141,6 +162,17 @@ pub trait Plugin: Send + Sync {
     fn formats(&self) -> &'static [Format];
     /// A view of the file with the settings of the plugin, or the text of why it cannot be opened.
     fn open(&self, path: &Path, settings: &Value) -> Result<Box<dyn View>, String>;
+    /// A view of the file as a MIME type of the formats of the plugin, whatever its name (Open
+    /// with: any file as its bytes, a text of any name as a text); empty for a format without a
+    /// type. A plugin of one way to show a file keeps this answer, `open`.
+    fn open_as(&self, path: &Path, _mime: &str, settings: &Value) -> Result<Box<dyn View>, String> {
+        self.open(path, settings)
+    }
+    /// Whether the plugin opens bytes in memory (`open_bytes`): Open with offers its formats for
+    /// the bytes of another view.
+    fn opens_bytes(&self) -> bool {
+        false
+    }
     /// A view of some bytes in memory under a name (a part of another file shown inside its
     /// view, `Host::open_inside`), of a MIME type of the formats of the plugin with its
     /// parameters (`text/plain; charset=utf-16le`); a plugin of files alone keeps this answer.
@@ -184,6 +216,25 @@ pub trait View {
     fn tools(&self) -> Vec<Tool> {
         Vec::new()
     }
+    /// Whether a command of `tools` is a switch that is on: the bar draws it pressed.
+    fn pressed(&self, _id: &str) -> bool {
+        false
+    }
+    /// The commands of the context of the view (its selection, the node or the place of its
+    /// cursor), answered by `act`: in its context menu (`crate::menus::context`) and in a
+    /// submenu of the menu of the window.
+    fn context(&self) -> Vec<Tool> {
+        Vec::new()
+    }
+    /// The bytes the view offers to the other plugins (Open with), when it has some: what is
+    /// selected, or the bytes from its cursor. `offered` gives them.
+    fn offer(&self) -> Option<Offer> {
+        None
+    }
+    /// The bytes of `offer`, or why they cannot be had.
+    fn offered(&mut self) -> Result<Vec<u8>, String> {
+        Err(NO_OFFER.to_owned())
+    }
     /// Items of the view in the menu of the window while its tab is in front.
     fn menu(&self) -> Vec<Tool> {
         Vec::new()
@@ -206,6 +257,8 @@ pub trait View {
 
 /// Why a plugin of files alone does not open bytes (`Plugin::open_bytes`).
 pub const NO_BYTES: &str = "the plugin opens files alone";
+/// Why a view that offers nothing gives no bytes (`View::offered`).
+pub const NO_OFFER: &str = "the view offers no bytes";
 
 /// A setting of a plugin: the field `name` of its settings as `T`, or `default` when it is not
 /// there or of another type.
@@ -383,21 +436,35 @@ impl Plugins {
         self.loaded.iter().position(|l| l.opens(path))
     }
 
-    /// The plugin of a file: the first that opens its extension, else the first of the MIME type
-    /// of its first bytes (`mime::sniff`), so that a file of another extension or of none opens
-    /// by what it holds.
+    /// The plugin of a file: the first of `all_for_file`.
     pub fn for_file(&self, path: &Path) -> Option<usize> {
-        if let Some(i) = self.for_path(path) {
-            return Some(i);
-        }
+        self.all_for_file(path).first().copied()
+    }
+
+    /// The plugins of a file in the order a host tries them: the ones of its extension, then
+    /// the ones of the MIME type of its first bytes (`mime::sniff`), so that a file of another
+    /// extension or of none opens by what it holds, then the ones of any bytes
+    /// (`mime::OCTET`), which a file no other plugin opens falls back to.
+    pub fn all_for_file(&self, path: &Path) -> Vec<usize> {
+        let mut out: Vec<usize> = (0..self.loaded.len())
+            .filter(|i| self.loaded[*i].opens(path))
+            .collect();
         let mut first = Vec::new();
-        let file = std::fs::File::open(path).ok()?;
-        std::io::Read::read_to_end(
-            &mut std::io::Read::take(file, mime::SNIFFED as u64),
-            &mut first,
-        )
-        .ok()?;
-        self.for_mime(mime::sniff(&first)?).first().copied()
+        if let Ok(file) = std::fs::File::open(path) {
+            let mut part = std::io::Read::take(file, mime::SNIFFED as u64);
+            let _ = std::io::Read::read_to_end(&mut part, &mut first);
+        } else {
+            return out;
+        }
+        let sniffed = mime::sniff(&first)
+            .map(|m| self.for_mime(m))
+            .unwrap_or_default();
+        for i in sniffed.into_iter().chain(self.for_mime(mime::OCTET)) {
+            if !out.contains(&i) {
+                out.push(i);
+            }
+        }
+        out
     }
 
     /// The plugins that name a MIME type, in their order, then for a textual type the ones of
@@ -590,6 +657,29 @@ mod tests {
         extensions: &["xml"],
         mimes: &["text/xml"],
     }];
+    static ANY: [Format; 1] = [Format {
+        name: "Bytes",
+        extensions: &["bin"],
+        mimes: &[mime::OCTET],
+    }];
+
+    /// A plugin of formats that opens bytes too.
+    struct Bytes(&'static [Format]);
+
+    impl Plugin for Bytes {
+        fn name(&self) -> &'static str {
+            "bytes"
+        }
+        fn formats(&self) -> &'static [Format] {
+            self.0
+        }
+        fn open(&self, _: &Path, _: &Value) -> Result<Box<dyn View>, String> {
+            Err(String::new())
+        }
+        fn opens_bytes(&self) -> bool {
+            true
+        }
+    }
 
     #[test]
     fn a_plugin_is_found_by_a_mime_type_and_its_fallbacks() {
@@ -632,7 +722,34 @@ mod tests {
         );
         assert_eq!(plugins.for_file(&file("blob", &[0, 1, 2, 0xFF])), None);
         assert_eq!(plugins.for_file(&dir.join("none")), None, "no file");
+        // A plugin of any bytes takes what no other opens, and comes last for the others.
+        plugins.add(PathBuf::from("any.dll"), Box::new(Named(&ANY)));
+        assert_eq!(plugins.for_file(&file("blob", &[0, 1, 2, 0xFF])), Some(2));
+        assert_eq!(plugins.all_for_file(&file("b.xml", b"<a/>")), [1, 0, 2]);
+        assert_eq!(plugins.all_for_file(&file("notes", b"plain")), [0, 2]);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_choices_of_open_with_come_by_their_type() {
+        let mut plugins = Plugins::default();
+        plugins.add(PathBuf::from("text.dll"), Box::new(Bytes(&TEXTS)));
+        plugins.add(PathBuf::from("xml.dll"), Box::new(Bytes(&XML)));
+        plugins.add(PathBuf::from("files.dll"), Box::new(Named(&TEXTS)));
+        plugins.add(PathBuf::from("any.dll"), Box::new(Bytes(&ANY)));
+        let choices = plugins.choices_for_bytes(Some("application/xml"));
+        let shown: Vec<(usize, bool)> = choices.iter().map(|c| (c.plugin, c.found)).collect();
+        assert_eq!(
+            shown,
+            [(1, true), (0, true), (3, false)],
+            "XML, then the text it falls back to, then the others; a plugin of files alone is none"
+        );
+        assert!(plugins.choices_for_bytes(None).iter().all(|c| !c.found));
+        let path = Path::new("a.txt");
+        let files = plugins.choices_for_file(path, Some(mime::OCTET));
+        let found: Vec<usize> = files.iter().filter(|c| c.found).map(|c| c.plugin).collect();
+        assert_eq!(found, [0, 2, 3], "by the name first, then by the bytes");
+        assert_eq!(files.len(), 4);
     }
 
     #[test]

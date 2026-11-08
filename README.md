@@ -10,7 +10,7 @@ session (`docs/ww.md`). A program with plugins adds `wwrt.dll` and the folder `p
 |---|---|
 | `crates/ww-base` | strict JSON files with the trait Document, paths inside the program folder, the clock |
 | `crates/ww` | the window: the shell and its trait `App`, the style and the themes, the translations, the painted tree and list, the Markdown viewer, the settings and the session, the browser edition (wasm32) |
-| `crates/wwrt` | the runtime of the programs with plugins, a Rust dylib: W# and egui re-exported, the native interface of the plugins (version 2: formats with their MIME types, menu items, bytes in memory, views inside a view), the type of some bytes, the trust of a plugin, the stable interface as a plugin |
+| `crates/wwrt` | the runtime of the programs with plugins, a Rust dylib: W# and egui re-exported, the native interface of the plugins (version 3: formats with their MIME types, menu items, bytes in memory, views inside a view, the context menu of a view, bytes offered and Open with), the parsers of TOML and XML for the plugins, the type of some bytes, the trust of a plugin, the stable interface as a plugin |
 | `stable/` | `wview.h`, the stable interface (version 1) for plugins of any language with a C FFI, and `rust/`, the crate `wview-stable` for a plugin of it in Rust of any toolchain |
 | `examples/wv-hello` | the template of a native plugin: every part a plugin has, once |
 | `examples/wv-mandelbrot` | the example of the stable interface in C: the Mandelbrot set |
