@@ -84,7 +84,7 @@ pub struct Settings<X: Extra> {
     /// The lines of a text or a page are wrapped to the width of the view; else the view
     /// scrolls sideways.
     pub wrap_lines: bool,
-    /// How wide a page of Markdown is (`table_width` in the first builds of 0.24.0).
+    /// How wide a page of Markdown is (`table_width` in its first builds).
     #[serde(alias = "table_width")]
     pub page_width: PageWidth,
     /// The window as it was at the last close, opened there again (fitted to the monitor).

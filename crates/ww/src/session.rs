@@ -12,8 +12,8 @@ use ww_base::{clock, jsonfile, paths};
 use crate::store;
 
 pub const DRAFT_FORMAT: &str = "ww-draft";
-/// The format of the drafts of WinWeaver before WW; read, never written.
-const EARLIER_DRAFT_FORMAT: &str = "winweaver-draft";
+/// The drafts of the earlier formats of a program (`<name>-draft`): read, never written.
+const EARLIER_DRAFT_SUFFIX: &str = "-draft";
 pub const DRAFT_VERSION: u32 = 1;
 const DRAFT_MAX_BYTES: u64 = 16 * 1024 * 1024;
 
@@ -100,7 +100,7 @@ pub fn read_drafts(dir: &Path) -> (Vec<(String, Draft)>, Vec<String>) {
             .and_then(|text| text.ok_or_else(|| format!("{name}: not found")))
             .and_then(|text| jsonfile::parse::<Draft>(&text, &name).map_err(|e| e.to_string()))
             .and_then(|d| {
-                if d.format == DRAFT_FORMAT || d.format == EARLIER_DRAFT_FORMAT {
+                if d.format == DRAFT_FORMAT || d.format.ends_with(EARLIER_DRAFT_SUFFIX) {
                     Ok(d)
                 } else {
                     Err(format!("{name}: not a draft"))
@@ -152,7 +152,7 @@ mod tests {
         std::fs::write(dir.join("broken.json"), "{").unwrap();
         std::fs::write(
             dir.join("earlier.json"),
-            "{\"format\": \"winweaver-draft\", \"version\": 1, \"profile\": {\"name\": \"Old\"}}",
+            "{\"format\": \"earlier-draft\", \"version\": 1, \"profile\": {\"name\": \"Old\"}}",
         )
         .unwrap();
         let (drafts, broken) = read_drafts(&dir);

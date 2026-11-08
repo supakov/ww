@@ -159,7 +159,7 @@ pub enum DocError {
         #[source]
         source: std::io::Error,
     },
-    #[error("{name}: not a WinWeaver {kind} (format {found})")]
+    #[error("{name}: not a {kind} (format {found})")]
     Format {
         name: String,
         kind: &'static str,

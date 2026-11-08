@@ -285,8 +285,8 @@ mod tests {
 
     #[test]
     fn a_search_finds_the_blocks_with_their_headings() {
-        let text = "# Guide\n\nFirst steps here.\n\n## Build\n\nCopy autounattend.xml to the stick.\n\n```\nkeep code\n\nwhole\n```\n";
-        let words = vec!["autounattend".to_owned()];
+        let text = "# Guide\n\nFirst steps here.\n\n## Build\n\nCopy the answers to the stick.\n\n```\nkeep code\n\nwhole\n```\n";
+        let words = vec!["answers".to_owned()];
         let blocks = matching_blocks(text, &words);
         assert_eq!(blocks.len(), 1);
         assert!(blocks[0].starts_with("#### Build"), "{blocks:?}");

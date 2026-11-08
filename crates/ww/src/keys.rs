@@ -3,8 +3,8 @@
 //!
 //! A browser keeps Ctrl+N, Ctrl+W, Ctrl+Tab, Ctrl+Shift+Tab and Ctrl+Shift+PgUp/PgDn for itself and
 //! never hands them to a page, so a build for wasm32 takes Alt for them: Alt+N, Alt+W, Alt+PgDn and
-//! Alt+PgUp, Alt+Shift+PgUp/PgDn. The page stops the browser from acting on the other keys of the
-//! program (`crates/wwlite/web/index.html`).
+//! Alt+PgUp, Alt+Shift+PgUp/PgDn. The page of the program stops the browser from acting on its
+//! other keys.
 
 use eframe::egui::{Key, KeyboardShortcut, Modifiers};
 

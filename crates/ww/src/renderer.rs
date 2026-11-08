@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use eframe::egui;
 
 #[cfg(not(any(feature = "glow", feature = "wgpu")))]
-compile_error!("winweaver-ui needs a renderer: the feature glow, wgpu or both");
+compile_error!("ww needs a renderer: the feature glow, wgpu or both");
 
 /// A renderer of the window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

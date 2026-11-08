@@ -1,7 +1,7 @@
 # AGENTS.md: map of the repository of W#
 
 For agents and developers: where things are, the rules, the commands.
-Last update: 07.11.2026.
+Last update: 08.11.2026.
 
 Repository: https://github.com/supakov/ww (private, branch `main`). Commits are authored by
 `digidult <271767060+digidult@users.noreply.github.com>` (a local `git config` of the clone, never
@@ -10,11 +10,10 @@ global). A commit made by an agent ends with
 
 ## 1. The project
 
-W# (`ww`) is the framework of the window of WinWeaver (digidult/winweaver), wedit and wview
-(supakov/wview), and the system of their plugins: `ww-base`, `ww`, the runtime `wwrt`, the stable
-interface `wview.h` with its crate `wview-stable`, and the examples of a plugin. It came out of the
-repository of WinWeaver on 07.11.2026 (WinWeaver 0.43.0, wview 0.14.0); its history before is
-there.
+W# (`ww`) is the framework of the window of programs with document tabs, wview and wedit
+(supakov/wview) among them, and the system of their plugins: `ww-base`, `ww`, the runtime
+`wwrt`, the stable interface `wview.h` with its crate `wview-stable`, and the examples of a
+plugin. The repository began on 07.11.2026.
 
 ## 2. What to read first
 
@@ -43,8 +42,10 @@ there.
    never started there by an agent, and a toolchain is installed there only on the word of its
    owner.
 9. The documents hold the current state; the history of the changes is in `docs/releases/`.
-10. Versions: `version` of the workspace grows with every pull request that reaches `main`, the
-    second number for a feature, the third for fixes alone; `wwrt::plugin::ABI` names it.
+10. Versions: `version` of the workspace (0.1.45 on 08.11.2026) grows with every pull request
+    that reaches `main`. An agent changes the third number alone; the first and the second
+    change only on the word of the customer. `wwrt::plugin::ABI` names it. The crate
+    `wview-stable` keeps the version of its interface (1.x for `wview.h` version 1).
 
 ## 4. Commands
 
@@ -66,7 +67,6 @@ backslashes is written with the file tools or a script file.
 
 | Program | Repository | Takes |
 |---|---|---|
-| WinWeaver, wwlite | digidult/winweaver | `ww-base`, `ww` |
 | wview and its plugins | supakov/wview, folder `wview` | `wwrt` (and W# through it), the template and `stable/` for its SDK |
 | wedit | supakov/wview, folder `wedit` | `ww` |
 

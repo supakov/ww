@@ -14,7 +14,7 @@ the exception such a program makes to the rule of one executable (AGENTS.md, rul
 stay as close to ordinary Rust as it can: traits, `egui::Ui`, the types of W#, no C layer in
 between.
 
-wview is a direction of its own, apart from WinWeaver, and its plugins come in two kinds: native
+wview is a direction of its own, and its plugins come in two kinds: native
 ones with the SDK of a release, the main way of every example, and a stable interface of C for
 other languages (the decisions of the customer of 04.11.2026, sections 6.5 and 6.7).
 
@@ -90,8 +90,7 @@ LTO, one codegen unit, stripped).
 | `plugins\wv_text.dll` | 27 KB | `wwrt.dll`, `std-*.dll` |
 | `plugins\wv_image.dll` | 52 KB | `wwrt.dll`, `std-*.dll` |
 
-For comparison the static programs of the repository with LTO: `wedit.exe` 12.9 MB,
-`winweaver.exe` 21.6 MB. A plugin with its own copy of egui would weigh about what wedit does (an
+For comparison wedit, a static program with LTO: `wedit.exe` 12.9 MB. A plugin with its own copy of egui would weigh about what wedit does (an
 estimate, not built).
 
 | What | Time |
@@ -131,8 +130,8 @@ draws the same views with the same egui, without a screen.
    apart, say) or takes fewer features of `windows`.
 3. **No LTO across the runtime.** rustc runs LTO for executables, cdylibs and static libraries,
    never for a `dylib`, and a `dylib` keeps every public function, since it exports them all:
-   `wwrt.dll` with W# is larger than wedit with W# and LTO. With the release profile of
-   WinWeaver (`lto = "thin"`) cargo builds `wwrt.dll` without LTO but every plugin and wview stop:
+   `wwrt.dll` with W# is larger than wedit with W# and LTO. With a release profile of
+   `lto = "thin"` cargo builds `wwrt.dll` without LTO but every plugin and wview stop:
    `cannot prefer dynamic linking when performing LTO`, `only 'staticlib', 'bin', and 'cdylib'
    outputs are supported with LTO`. The family has a release profile of its own.
 4. **Every shared crate through the runtime.** A plugin with a dependency of its own on a crate
@@ -165,7 +164,7 @@ draws the same views with the same egui, without a screen.
     wwrt call 68 DLLs of Windows through `raw-dylib`, rustc writes an import library of each for
     every link that depends on them (`--print link-args` names them), and the toolchain gnu runs
     `dlltool` and `as` for each one. The toolchain msvc should write them through LLVM itself; CI
-    measures what a link of a plugin costs there. The links of WinWeaver on this PC likely pay the
+    measures what a link of a plugin costs there. The links of every program on W# on this PC likely pay the
     same.
 12. **A plugin of the SDK loads when the release and the SDK are one tree.** Phase 2 packed the
     crates of the repository into an SDK at another place and built the template there: the

@@ -21,7 +21,7 @@ a table wider than the text must not move the right edge of the text that follow
 row of the table is as high as its highest cell.
 
 ```
-cargo build --release -p winweaver --no-default-features --features wgpu && copy target\\release\\winweaver.exe C:\\WinWeaver\\WinWeaver\\winweaver.exe && C:\\WinWeaver\\WinWeaver\\winweaver.exe --smoke-window
+cargo build --release -p program --no-default-features --features wgpu && copy target\\release\\program.exe C:\\Programs\\Program\\program.exe && C:\\Programs\\Program\\program.exe --smoke-window
 ```
 
 - A list item with `code` in it.

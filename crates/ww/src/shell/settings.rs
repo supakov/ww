@@ -122,7 +122,7 @@ impl<A: App> Window<A> {
             self.language_and_theme(ui, acts);
         });
         // The fonts are a change of the theme file, offered on their own where the themes are not
-        // edited (wwlite), so the size of the text can be chosen.
+        // edited (`App::chooses_fonts`), so the size of the text can be chosen.
         if A::chooses_fonts() {
             style::block(ui, |ui| self.theme_fonts(ui));
         }

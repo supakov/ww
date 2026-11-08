@@ -393,16 +393,16 @@ pub fn visuals(p: &Palette) -> egui::Visuals {
 }
 
 fn palettes_id() -> egui::Id {
-    egui::Id::new("winweaver-palettes")
+    egui::Id::new("ww-palettes")
 }
 
 fn fonts_id() -> egui::Id {
-    egui::Id::new("winweaver-fonts")
+    egui::Id::new("ww-fonts")
 }
 
 /// The fonts in use for light and dark, once [`install_fonts`] ran.
 fn installed_id() -> egui::Id {
-    egui::Id::new("winweaver-fonts-installed")
+    egui::Id::new("ww-fonts-installed")
 }
 
 /// The name of the family of texts of a side: `light` or `dark`, with `-strong` for titles and

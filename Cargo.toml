@@ -1,4 +1,4 @@
-# W# (ww): the framework of the window of WinWeaver, wedit and wview, and the system of their
+# W# (ww): the framework of the window of programs with document tabs, and the system of their
 # plugins (wwrt, the stable interface wview.h and its crate wview-stable), with the examples of a
 # plugin (examples/). The programs take it as a git dependency of the branch main (README.md).
 [workspace]
@@ -6,7 +6,7 @@ resolver = "3"
 members = ["crates/ww-base", "crates/ww", "crates/wwrt", "stable/rust", "examples/wv-hello"]
 
 [workspace.package]
-version = "0.44.0"
+version = "0.1.45"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT"

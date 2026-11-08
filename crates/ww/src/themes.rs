@@ -15,7 +15,10 @@ use ww_base::jsonfile;
 use crate::store;
 use crate::style::{self, Fonts, Palette};
 
-pub const FORMAT: &str = "winweaver-theme";
+pub const FORMAT: &str = "ww-theme";
+/// Every format of a theme ends so: `ww-theme`, and the earlier formats of a program on W#
+/// (`<name>-theme`), read and never written.
+const SUFFIX: &str = "-theme";
 pub const VERSION: u32 = 1;
 pub const EXTENSION: &str = "wwtheme";
 const MAX_BYTES: u64 = 64 * 1024;
@@ -94,11 +97,8 @@ impl Theme {
         if theme.format.is_empty() {
             theme.format = FORMAT.to_owned();
         }
-        if theme.format != FORMAT {
-            return Err(format!(
-                "{name}: not a WinWeaver theme (format {})",
-                theme.format
-            ));
+        if !theme.format.ends_with(SUFFIX) {
+            return Err(format!("{name}: not a theme (format {})", theme.format));
         }
         if theme.version > VERSION {
             return Err(format!(
@@ -227,7 +227,7 @@ mod tests {
 
     #[test]
     fn the_embedded_themes_load_with_their_colours_and_fonts() {
-        let list = themes(&std::env::temp_dir().join("winweaver-no-themes"));
+        let list = themes(&std::env::temp_dir().join("ww-no-themes"));
         // Light and Dark of WW; a program adds its own with `install`.
         assert_eq!(list.len(), 2);
         let light = list.iter().find(|t| t.id == "light").unwrap();
@@ -246,7 +246,7 @@ mod tests {
 
     #[test]
     fn a_theme_file_replaces_the_embedded_one_and_saves_back() {
-        let dir = std::env::temp_dir().join(format!("winweaver-themes-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("ww-themes-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
@@ -271,7 +271,7 @@ mod tests {
         assert_eq!(back.font, "Verdana");
         assert_eq!(back.font_size, 36.0, "the size is kept in its range");
         assert_eq!(back.path.as_deref(), Some(path.as_path()));
-        assert!(Theme::parse(r#"{"format": "winweaver-profile"}"#, "x").is_err());
+        assert!(Theme::parse(r#"{"format": "ww-profile"}"#, "x").is_err());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

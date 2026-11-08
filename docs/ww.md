@@ -1,7 +1,8 @@
 # WW (W#): a window with tabs for programs that analyse and manage a system
 
-WW is the framework WinWeaver, wedit and wview are built on: the crates `ww-base` and `ww` of this
-repository (supakov/ww), which the programs take as a git dependency of its branch `main`. A program
+WW is the framework of programs with document tabs, wedit and wview among them: the crates
+`ww-base` and `ww` of this repository (supakov/ww), which the programs take as a git dependency
+of its branch `main`. A program
 on WW is one executable with its data folders next to it, a window with document tabs, a menu, a
 command bar of the active tab, a navigation row where a tab has one, a message bar, a status bar, a
 settings tab, themes with their fonts and an editor, translations, drafts of unsaved changes and the
@@ -158,8 +159,8 @@ Built for `wasm32-unknown-unknown` with the feature `glow` alone, a program star
 `ww::web::start::<P>(canvas_id, make).await` in a task of the page (`wasm_bindgen_futures::spawn_local`
 from `main`): eframe's `WebRunner` draws in the canvas of that id, the log of eframe goes to the
 console, and a failure of the start replaces the text of the element `loading_text` of the page.
-The page loads the module through the glue `wasm-bindgen --target web` writes (`crates/wwlite/web/
-index.html` is the example) and is served over http. Files come by their bytes: `ShellAct::Open`
+The page loads the module through the glue `wasm-bindgen --target web` writes and is served
+over http. Files come by their bytes: `ShellAct::Open`
 runs `rfd::AsyncFileDialog` with the kinds of `App::open_filters`, a drop on the page is read, and the
 next frame hands each file to `App::open_bytes(shell, name, bytes)` as `ShellAct::OpenBytes`; a save is a
 download through `ww::store::download(name, bytes, mime)` (the theme editor does it for Save as).
@@ -170,9 +171,9 @@ download through `ww::store::download(name, bytes, mime)` (the theme editor does
 
 Every text of the interface is `tr("English")` or `trf("English {name}", &[("name", &value)])`.
 A dictionary is a JSON object of English keys and translated values with `_language` for the
-name of the language. WinWeaver's test of the translations reads the literals of `winweaver-ui`
-and of `ww` (its sources at `ww::SOURCES`, the checkout of git) and fails when an embedded
-language lacks one; a program of its own keeps its own
+name of the language. The test of the translations of a program reads its own literals and the
+ones of `ww` (its sources at `ww::SOURCES`, the checkout of git) and fails when an embedded
+language lacks one; every program keeps its own
 files complete (wedit ships `lang/uk/ui.json` with every text of wedit and of WW).
 
 ## 7. wedit, the example

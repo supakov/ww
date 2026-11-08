@@ -1,6 +1,6 @@
 # W# (ww)
 
-The framework of the window of WinWeaver, wedit and wview, and the system of their plugins. A
+The framework of the window of programs with document tabs, and the system of their plugins. A
 program on W# is one executable with its data folders next to it: a window with document tabs, a
 menu, a command bar, a status bar, settings, themes, translations, drafts and the tabs of the last
 session (`docs/ww.md`). A program with plugins adds `wwrt.dll` and the folder `plugins`
@@ -34,7 +34,7 @@ program does it before every build. The repository is private: cargo fetches it 
 of git on a computer, with a token in CI (the secret `WW_TOKEN`, a token that reads this
 repository; AGENTS.md).
 
-The programs: WinWeaver (digidult/winweaver), wview and wedit (supakov/wview).
+Among the programs on it: wview and wedit (supakov/wview).
 
 ## Checks
 

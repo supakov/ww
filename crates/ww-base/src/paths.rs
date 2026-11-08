@@ -1,5 +1,5 @@
 //! The paths the files of the program keep (`docs/spec/02-documents.md` section 2): a file inside
-//! the folder of the program is kept relative to it, as `.\profiles\Office.wwprofile`, so the
+//! the folder of the program is kept relative to it, as `.\documents\Office.txt`, so the
 //! folder can move or go to another PC with its settings, bookmarks, drafts and diffs; any other
 //! file keeps its absolute path. In memory every path is absolute.
 
@@ -87,19 +87,19 @@ mod tests {
     use super::*;
 
     fn base() -> PathBuf {
-        std::env::temp_dir().join("ww-paths").join("WinWeaver")
+        std::env::temp_dir().join("ww-paths").join("Program")
     }
 
     #[test]
     fn a_file_inside_the_program_folder_is_kept_relative() {
         let base = base();
-        let file = base.join("profiles").join("Office.wwprofile");
+        let file = base.join("documents").join("Office.txt");
         let kept = stored(&file, &base);
-        let want = Path::new(".").join("profiles").join("Office.wwprofile");
+        let want = Path::new(".").join("documents").join("Office.txt");
         assert_eq!(kept, want);
         assert_eq!(resolved(&kept, &base), file);
-        let moved = std::env::temp_dir().join("elsewhere").join("WinWeaver");
-        let there = moved.join("profiles").join("Office.wwprofile");
+        let moved = std::env::temp_dir().join("elsewhere").join("Program");
+        let there = moved.join("documents").join("Office.txt");
         assert_eq!(resolved(&kept, &moved), there);
         let text = stored_text(&file.display().to_string(), &base);
         assert!(text.starts_with('.'), "{text}");
@@ -109,15 +109,15 @@ mod tests {
     #[test]
     fn other_paths_and_names_stay_as_they_are() {
         let base = base();
-        let outside = base.with_file_name("other.wwprofile");
+        let outside = base.with_file_name("other.txt");
         assert_eq!(stored(&outside, &base), outside);
         assert_eq!(stored(&base, &base), base);
-        let sibling = base.with_file_name("WinWeaver2").join("a");
+        let sibling = base.with_file_name("Program2").join("a");
         assert_eq!(stored(&sibling, &base), sibling);
-        let name = Path::new("a.wwprofile");
+        let name = Path::new("a.txt");
         assert_eq!(stored(name, &base), name);
         assert_eq!(resolved(name, &base), name);
-        for text in ["", "Office", "HKEY_CURRENT_USER\\Software", "a.wwprofile"] {
+        for text in ["", "Office", "HKEY_CURRENT_USER\\Software", "a.txt"] {
             assert_eq!(stored_text(text, &base), text);
             assert_eq!(resolved_text(text, &base), text);
         }
@@ -128,8 +128,8 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn the_case_of_the_folder_does_not_matter_on_windows() {
-        let file = Path::new("C:\\WinWeaver\\Profiles\\A.wwprofile");
-        let kept = stored(file, Path::new("c:\\winweaver"));
-        assert_eq!(kept, Path::new(".\\Profiles\\A.wwprofile"));
+        let file = Path::new("C:\\Program\\Documents\\A.txt");
+        let kept = stored(file, Path::new("c:\\program"));
+        assert_eq!(kept, Path::new(".\\Documents\\A.txt"));
     }
 }
