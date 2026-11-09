@@ -71,6 +71,7 @@ fn every_text_of_the_window_is_translated() {
     let mut wanted = testing::plugin_texts(&root.join("src"));
     wanted.extend(testing::texts(Path::new(wwrt::SOURCES)));
     wanted.extend(testing::texts(Path::new(wwrt::ww::SOURCES)));
+    wanted.extend(testing::texts(Path::new(wwrt::wwmcp::SOURCES)));
     // The texts the window translates without a literal of its own: the hint of New, the hints of
     // the search of the tabs, the sections of the settings, the colour of the themes.
     wanted.extend(
@@ -241,4 +242,72 @@ fn the_page_of_the_plugins_and_the_settings_draw() {
     let w = h.state_mut();
     w.apply(vec![Act::Shell(ShellAct::Activate(1))]);
     h.run_steps(2);
+}
+
+/// The tools of the window and of the program through the server: a client of another thread
+/// opens a note, lists the tabs and closes it, answered at the frames of the window; the tools
+/// of the plugins are listed with their sources, and the tab of the server opens.
+#[test]
+fn the_tools_of_the_window_answer_a_client() {
+    use wwrt::serde_json::json;
+    use wwrt::wwmcp::{Caller, Config, Mode};
+
+    let mut w = window();
+    let server = w.app.mcp().unwrap().panel.server.clone();
+    let sources: Vec<String> = server.tools().into_iter().map(|l| l.source).collect();
+    assert!(sources.starts_with(&["window".to_owned()]), "{sources:?}");
+    let names: Vec<String> = server.tools().into_iter().map(|l| l.tool.name).collect();
+    for name in ["list_files", "open_file", "new_note", "hello_greet"] {
+        assert!(names.iter().any(|n| n == name), "{name} in {names:?}");
+    }
+    server.set_config(Config {
+        mode: Mode::Edit,
+        ..Config::default()
+    });
+    let client = server.clone();
+    let thread = std::thread::spawn(move || {
+        let note = client.call(
+            "new_note",
+            &json!({ "text": "from an agent" }),
+            &Caller::Client,
+        )?;
+        let tabs = client.call("list_files", &json!({}), &Caller::Client)?;
+        let closed = client.call(
+            "close_file",
+            &json!({ "tab": note["tab"] }),
+            &Caller::Client,
+        )?;
+        Ok::<_, wwrt::wwmcp::ToolError>((note, tabs, closed))
+    });
+    let ctx = egui::Context::default();
+    let bridge = w.app.mcp().unwrap().bridge.clone();
+    for _ in 0..2000 {
+        wwrt::wwmcp::window::answer(
+            &mut w.app,
+            &mut w.shell,
+            &bridge,
+            &ctx,
+            &mut |app, shell, tool, args| app.program_tool(shell, tool, args),
+        );
+        if thread.is_finished() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    let (note, tabs, closed) = thread.join().unwrap().unwrap();
+    assert_eq!(closed["tab"], note["tab"]);
+    let listed = tabs.as_array().unwrap();
+    assert!(listed.iter().any(|t| t["tab"] == note["tab"]), "{tabs}");
+    assert!(!w.shell.docs.iter().any(|d| matches!(d, Doc::Note(_))));
+    // The mode read refuses the tool that opens a tab.
+    server.set_config(Config::default());
+    let refused = server
+        .call("new_note", &json!({}), &Caller::Client)
+        .unwrap_err();
+    assert_eq!(refused.kind, wwrt::wwmcp::Kind::NotAllowed);
+    w.apply(vec![Act::Host(HostAct::OpenMcp)]);
+    assert!(matches!(
+        w.shell.active_doc(),
+        Some(Doc::Host(HostDoc::Mcp(_)))
+    ));
 }

@@ -8,7 +8,10 @@
 //! items of the menu of the plugin and of the view, the context menu of the view, its text
 //! offered to the other plugins (Open with), a setting, the status bar, the files it embeds (its
 //! guide in three languages, a sample, the translations of its texts) and a page of them opened
-//! from its menu.
+//! from its menu, and tools for the MCP server of the program and a call by name: a greeting that
+//! reads an option of the plugin, a count of the words of a text, and its sample opened in a tab
+//! through the tool `open_file` of the program, called by its name, which an access option of the
+//! plugin allows.
 
 use std::path::Path;
 
@@ -18,10 +21,11 @@ use wwrt::input::{self, Cursor};
 use wwrt::menus;
 use wwrt::mime;
 use wwrt::plugin::{Format, Host, Offer, Plugin, Request, Tool, View, set_setting, setting};
-use wwrt::serde_json::Value;
+use wwrt::serde_json::{Value, json};
 use wwrt::ww::embedded::Embedded;
 use wwrt::ww::i18n::{tr, trf};
 use wwrt::ww::style;
+use wwrt::wwmcp::{self, Args, Call, Choice, Kind, Mode, Outcome, ToolDef, fail};
 
 /// The name of the plugin (translated by the host).
 const NAME: &str = "Hello, the template of a plugin";
@@ -63,6 +67,33 @@ static FILES: Embedded = wwrt::ww::embed![
 
 /// The page of the guide of the plugin, among its files.
 const GUIDE: &str = "docs/guide.md";
+/// The sample of the plugin, among its files.
+const SAMPLE: &str = "samples/sample.hello";
+/// The id of the plugin, the name of its DLL: the caller of the tools it calls.
+const ID: &str = "ww_hello";
+
+/// A greeting of a name in the manner of the option `greeting`.
+fn greeting(name: &str, manner: &str) -> String {
+    let name = if name.trim().is_empty() {
+        "world"
+    } else {
+        name.trim()
+    };
+    if manner == "warm" {
+        format!("Hello, {name}, so good to see you!")
+    } else {
+        format!("Hello, {name}!")
+    }
+}
+
+/// The letters, the words and the lines of a text.
+fn counted(text: &str) -> Value {
+    json!({
+        "letters": text.chars().filter(|c| c.is_alphabetic()).count(),
+        "words": text.split_whitespace().count(),
+        "lines": text.lines().count(),
+    })
+}
 
 /// The view of the first line of a text.
 fn hello(text: &str) -> Box<dyn View> {
@@ -152,6 +183,71 @@ impl Plugin for HelloPlugin {
                 .requests
                 .push(Request::OpenEmbedded(FILES, GUIDE.to_owned())),
             _ => {}
+        }
+    }
+
+    /// Its tools: a group of the plugin, each with the mode and the options it needs.
+    fn tools(&self) -> Vec<ToolDef> {
+        vec![
+            ToolDef::new(
+                "hello_greet",
+                "hello",
+                "Greets a name in the manner the option greeting of the plugin sets.",
+                wwmcp::schema(json!({ "name": wwmcp::text("The name to greet") }), &[]),
+            ),
+            ToolDef::new(
+                "hello_count",
+                "hello",
+                "Counts the letters, the words and the lines of a text.",
+                wwmcp::schema(json!({ "text": wwmcp::text("The text") }), &["text"]),
+            ),
+            ToolDef::new(
+                "hello_sample",
+                "hello",
+                "Writes the sample hello into the temporary folder and opens it in a tab of the window, through the tool open_file of the program.",
+                wwmcp::no_arguments(),
+            )
+            .mode(Mode::Files)
+            .needs("open_tabs", "on"),
+        ]
+    }
+
+    /// Its options: a value a tool reads, and an access setting a tool needs.
+    fn tool_options(&self) -> Vec<Choice> {
+        vec![
+            Choice::of(
+                "greeting",
+                "Greeting",
+                &[("plain", "Plain"), ("warm", "Warm")],
+            ),
+            Choice::switch("open_tabs", "May open tabs of the window")
+                .help("hello_sample opens its sample through the tool open_file of the program"),
+        ]
+    }
+
+    fn call_tool(&self, name: &str, args: &Value, call: &Call<'_>) -> Outcome {
+        let args = Args(args);
+        match name {
+            "hello_greet" => Ok(json!({
+                "text": greeting(&args.optional_text("name"), call.option("greeting")),
+            })),
+            "hello_count" => Ok(counted(&args.text("text")?)),
+            "hello_sample" => {
+                let bytes = FILES
+                    .get(SAMPLE)
+                    .map(|f| f.bytes)
+                    .ok_or_else(|| fail(Kind::NotFound, "the sample is not embedded"))?;
+                let path = std::env::temp_dir().join("ww-hello-sample.hello");
+                std::fs::write(&path, bytes).map_err(|e| fail(Kind::WriteFailed, e.to_string()))?;
+                // A tool of the program, by its name: the switches of the server apply to it.
+                let opened = wwrt::tools::call(
+                    "open_file",
+                    &json!({ "path": path.display().to_string() }),
+                    ID,
+                )?;
+                Ok(json!({ "path": path.display().to_string(), "tab": opened }))
+            }
+            _ => Err(fail(Kind::NotFound, format!("no tool {name}"))),
         }
     }
 
@@ -368,6 +464,41 @@ mod tests {
         assert_eq!(link.as_deref(), Some("samples/sample.hello"));
         let codes: Vec<&str> = files.translations().iter().map(|(c, _)| *c).collect();
         assert_eq!(codes, ["uk", "ru"]);
+    }
+
+    #[test]
+    fn the_tools_greet_count_and_need_their_option() {
+        use std::collections::BTreeMap;
+        let plugin = HelloPlugin;
+        let names: Vec<String> = plugin.tools().into_iter().map(|t| t.name).collect();
+        assert_eq!(names, ["hello_greet", "hello_count", "hello_sample"]);
+        let warm = BTreeMap::from([("greeting".to_owned(), "warm".to_owned())]);
+        let call = Call {
+            mode: Mode::Read,
+            options: &warm,
+            caller: &wwmcp::Caller::Program,
+        };
+        let greeted = plugin
+            .call_tool("hello_greet", &json!({ "name": "Ann" }), &call)
+            .unwrap();
+        assert_eq!(greeted["text"], "Hello, Ann, so good to see you!");
+        let counted = plugin
+            .call_tool(
+                "hello_count",
+                &json!({ "text": "Hello, big world\nagain" }),
+                &call,
+            )
+            .unwrap();
+        assert_eq!(counted, json!({ "letters": 18, "words": 4, "lines": 2 }));
+        let none = plugin
+            .call_tool("hello_none", &json!({}), &call)
+            .unwrap_err();
+        assert_eq!(none.kind, Kind::NotFound);
+        let sample = &plugin.tools()[2];
+        assert_eq!(
+            (sample.mode, sample.needs[0].option.as_str()),
+            (Mode::Files, "open_tabs")
+        );
     }
 
     #[test]

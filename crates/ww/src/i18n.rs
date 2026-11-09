@@ -78,6 +78,17 @@ pub fn tr(text: &'static str) -> &'static str {
     current.and_then(|t| t.get(text).copied()).unwrap_or(text)
 }
 
+/// The translation of a text known only at run time (the name of an option or of a group a
+/// source of tools gives, the name of a plugin), the text itself when there is none. The texts of
+/// a program use `tr`, whose literals the tests of its translations find.
+pub fn tr_any(text: &str) -> String {
+    let current = CURRENT.read().map(|c| *c).unwrap_or(None);
+    current
+        .and_then(|t| t.get(text).copied())
+        .unwrap_or(text)
+        .to_owned()
+}
+
 /// `tr` of a text with `{name}` placeholders, filled from `args`.
 pub fn trf(text: &'static str, args: &[(&str, &dyn std::fmt::Display)]) -> String {
     let mut out = tr(text).to_owned();

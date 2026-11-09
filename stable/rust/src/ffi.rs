@@ -97,6 +97,55 @@ pub struct WwHost {
     pub slice: Option<SliceFn>,
     pub close_source: Option<CloseSourceFn>,
     pub cache: Option<CacheFn>,
+    pub this: *mut c_void,
+    pub call_tool: Option<CallToolFn>,
+    pub free_text: Option<FreeTextFn>,
+}
+
+/// `call_tool` of the host.
+pub type CallToolFn =
+    unsafe extern "C" fn(*mut c_void, *const c_char, *const c_char, *mut *mut c_char) -> i32;
+/// `free_text` of the host and `free_answer` of the tools.
+pub type FreeTextFn = unsafe extern "C" fn(*mut c_char);
+/// `call` of the tools.
+pub type ToolCallFn =
+    unsafe extern "C" fn(*const c_char, *const c_char, *const c_char, *mut *mut c_char) -> i32;
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct WwTool {
+    pub name: *const c_char,
+    pub description: *const c_char,
+    pub schema: *const c_char,
+    pub group: *const c_char,
+    pub mode: u32,
+    pub needs: *const c_char,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct WwOption {
+    pub key: *const c_char,
+    pub title: *const c_char,
+    pub values: *const *const c_char,
+    pub labels: *const *const c_char,
+    pub value_count: u32,
+    pub initial: *const c_char,
+    pub help: *const c_char,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct WwTools {
+    pub api_version: u32,
+    pub size: u32,
+    pub name: *const c_char,
+    pub tools: *const WwTool,
+    pub tool_count: u32,
+    pub options: *const WwOption,
+    pub option_count: u32,
+    pub call: Option<ToolCallFn>,
+    pub free_answer: Option<FreeTextFn>,
 }
 
 #[repr(C)]

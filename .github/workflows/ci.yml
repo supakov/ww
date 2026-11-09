@@ -85,6 +85,26 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "the bundle did not draw" }
           & $demo --probe dist\ww-demo\wwrt.dll
           if ($LASTEXITCODE -ne 0) { throw "the plugin of any bytes did not draw" }
+      - name: The tools of the plugins over MCP without a window (stdio)
+        # The release loads the native template, the plugin in C and the one of stable Rust, and
+        # answers a client on stdio: the list of the tools and a call of a tool of each.
+        shell: pwsh
+        run: |
+          $demo = "dist\ww-demo\ww-demo.exe"
+          $requests = @(
+            '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"ci"}}}',
+            '{"jsonrpc":"2.0","id":2,"method":"tools/list"}',
+            '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"mandelbrot_escape","arguments":{"x":-1,"y":0}}}',
+            '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"mandelbrot_ascii","arguments":{"width":40,"height":12}}}',
+            '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"grey_cache","arguments":{}}}',
+            '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"hello_greet","arguments":{"name":"CI"}}}'
+          ) -join "`n"
+          $out = $requests | & $demo --mcp stdio | Out-String
+          Write-Output $out
+          foreach ($want in '"mandelbrot_escape"', '"grey_cache"', '"hello_greet"', '\"inside\": true', 'Hello, CI', '\"budget\"', '\"lines\"') {
+            if (-not $out.Contains($want)) { throw "the answer of MCP lacks $want" }
+          }
+          if ($out.Contains('"isError":true')) { throw "a tool failed" }
       - name: The window draws (OpenGL or DirectX 12 on WARP)
         shell: pwsh
         run: |

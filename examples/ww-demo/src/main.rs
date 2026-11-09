@@ -29,6 +29,9 @@ const USAGE: &str = "ww-demo, the demo of W#
   ww-demo --smoke-window     open a small window, draw two frames, print what drew them
   ww-demo --version          print the version
   ww-demo --help             this text
+  ww-demo --mcp FILE|stdio|http [options]
+                             serve the tools of the plugins over MCP without the window (the
+                             options below; the tab MCP server of the window writes the file)
 
 The plugins are the DLLs of the folder plugins next to ww-demo.exe (or of the folder
 WW_DEMO_PLUGINS names), and two plugins the program makes itself.";
@@ -36,9 +39,13 @@ WW_DEMO_PLUGINS names), and two plugins the program makes itself.";
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let first = args.first().map(String::as_str);
+    // The log of the MCP server and the crash handlers, in the folder logs next to the program.
+    let program = format!("ww-demo {}", app::VERSION);
+    let logs = wwrt::ww::folders::exe_dir().join("logs");
+    wwrt::wwmcp::log::init(&logs, &program, first == Some("--mcp"));
     if matches!(first, Some("--help" | "-h")) {
         attach_console();
-        println!("{USAGE}");
+        println!("{USAGE}\n{}", wwrt::wwmcp::cli::USAGE);
         return ExitCode::SUCCESS;
     }
     if first == Some("--version") {
@@ -77,6 +84,15 @@ fn main() -> ExitCode {
                 }
             }
         }
+        Some("--mcp") => match host::serve_mcp(app::info(), &plugins, Vec::new(), &args[1..]) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                attach_console();
+                eprintln!("{e}");
+                wwrt::wwmcp::log::line("ERROR", &e);
+                ExitCode::from(2)
+            }
+        },
         Some("--smoke-window") => {
             attach_console();
             match wwrt::ww::smoke_window::<app::Demo>(None) {

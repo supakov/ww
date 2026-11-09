@@ -8,6 +8,7 @@ members = [
     "crates/ww-base",
     "crates/ww",
     "crates/wwrt",
+    "crates/wwmcp",
     "stable/rust",
     "examples/ww-hello",
     "examples/ww-demo",
@@ -16,7 +17,7 @@ members = [
 exclude = ["examples/ww-grey"]
 
 [workspace.package]
-version = "0.1.47"
+version = "0.1.48"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT"

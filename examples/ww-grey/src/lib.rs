@@ -6,11 +6,12 @@
 //! any size (`open_file` of the host) or some bytes another view offers (a `Source`: a part of a
 //! file, without a copy). The wheel, the arrows and the page keys scroll, + and - change the
 //! width of a row, the bar has the width and the zoom; the status bar names the offset of the
-//! first row shown and the state of the cache of the host.
+//! first row shown and the state of the cache of the host. Its one tool (`tools!`), `grey_cache`,
+//! gives an agent the state of that cache.
 
 use ww_stable::{
     cache, keys, open_file, Control, Cursor, File, Format, Frame, Input, Picture, Plugin, Source,
-    View,
+    Tool, Tools, View, MODE_READ, TOOL_FAILED, TOOL_NOT_FOUND,
 };
 
 /// The widths of a row the bar offers.
@@ -176,3 +177,29 @@ ww_stable::plugin!(
         sniff: None,
     }
 );
+
+/// The tool of the plugin: the state of the cache of the blocks of the host, as JSON.
+fn run_tool(tool: &str, _args: &str, _options: &str) -> Result<String, (i32, String)> {
+    if tool != "grey_cache" {
+        return Err((TOOL_NOT_FOUND, format!("no tool {tool}")));
+    }
+    let c = cache().ok_or((TOOL_FAILED, "the host tells no cache".to_owned()))?;
+    Ok(format!(
+        r#"{{"block": {}, "budget": {}, "used": {}, "blocks": {}, "files": {}, "reads": {}, "hits": {}}}"#,
+        c.block, c.budget, c.used, c.blocks, c.files, c.reads, c.hits
+    ))
+}
+
+ww_stable::tools!(Tools {
+    name: "Bytes as a picture (stable Rust)",
+    tools: &[Tool {
+        name: "grey_cache",
+        description: "The state of the cache of the blocks of the program: the size of a block, the budget, the bytes and the blocks in memory, the open files, the reads and the hits.",
+        schema: r#"{"type": "object", "properties": {}}"#,
+        group: "grey",
+        mode: MODE_READ,
+        needs: "",
+    }],
+    options: &[],
+    call: run_tool,
+});

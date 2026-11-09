@@ -8,8 +8,8 @@ repository), and each page of this guide names the sources of what it shows.
   status bar, the work in the background, a question, the settings, the themes, the translations
   and the drafts.
 - [The plugins](plugins.md): a file opened by the plugin of its type, Open with, the context
-  menu of a view, a view inside a view, the plugins of other languages and the cache of the
-  blocks.
+  menu of a view, a view inside a view, the plugins of other languages, the cache of the
+  blocks, and the tools of the program and of its plugins for AI agents (the MCP server).
 - [Embedded files](files.md): the pages of this guide, its translations and the samples the
   program carries inside its executable.
 

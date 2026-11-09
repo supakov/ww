@@ -2,13 +2,18 @@
   "Bigger": "Більше",
   "Draw the text in the accent colour": "Малювати текст кольором акценту",
   "Frame": "Рамка",
+  "Greeting": "Привітання",
   "Guide of the plugin": "Посібник плагіна",
   "Hello files": "Файли привітання",
   "Hello from the menu of the plugin": "Вітання з меню плагіна",
   "Hello, the template of a plugin": "Привітання, шаблон плагіна",
+  "May open tabs of the window": "Може відкривати вкладки вікна",
+  "Plain": "Просте",
   "Reset": "Скинути",
   "Say hello": "Привітатися",
   "Smaller": "Менше",
   "The file is too large for a hello": "Файл завеликий для привітання",
+  "Warm": "Тепле",
+  "hello_sample opens its sample through the tool open_file of the program": "hello_sample відкриває свій зразок через інструмент open_file програми",
   "{size} points, moved by {x}, {y}": "{size} пт, зсув {x}, {y}"
 }

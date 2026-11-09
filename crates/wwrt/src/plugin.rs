@@ -23,6 +23,7 @@
 use std::collections::BTreeMap;
 use std::ffi::{CStr, c_char};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use serde_json::Value;
 use ww::eframe::egui;
@@ -131,6 +132,8 @@ pub struct Host<'a> {
     pub every_settings: Option<&'a BTreeMap<String, Value>>,
     /// How deep the view is inside other views: 0 for the view of a tab.
     pub depth: u32,
+    /// The id of the plugin of the view, the caller of the tools it calls.
+    pub plugin_id: &'a str,
 }
 
 impl<'a> Host<'a> {
@@ -144,7 +147,14 @@ impl<'a> Host<'a> {
             plugins: None,
             every_settings: None,
             depth: 0,
+            plugin_id: "",
         }
+    }
+
+    /// Calls a tool of the program by its name (`crate::tools::call`), as the plugin of the
+    /// view: the switches, the mode and the options of the server apply.
+    pub fn call_tool(&self, name: &str, args: &Value) -> wwmcp::Outcome {
+        crate::tools::call(name, args, self.plugin_id)
     }
 
     /// The same host with the plugins of the window and the settings of each.
@@ -225,6 +235,25 @@ pub trait Plugin: Send + Sync {
     /// Whether the plugin has settings for `settings_ui`.
     fn has_settings(&self) -> bool {
         false
+    }
+    /// The tools of the plugin for the server of the program (`wwmcp`, the tab MCP) and for a
+    /// call by name: a plugin may have tools and no formats, a source of tools without a view.
+    fn tools(&self) -> Vec<wwmcp::ToolDef> {
+        Vec::new()
+    }
+    /// The options its tools need or read (its access settings), kept in the branch of the
+    /// plugin of the configuration of the server and shown in its card of the tab MCP.
+    fn tool_options(&self) -> Vec<wwmcp::Choice> {
+        Vec::new()
+    }
+    /// Runs one of its tools after the server checked the switches, the mode and the options.
+    /// Any thread calls it, several at once, and a tool may call another tool of the program by
+    /// its name (`crate::tools::call`).
+    fn call_tool(&self, name: &str, _args: &Value, _call: &wwmcp::Call<'_>) -> wwmcp::Outcome {
+        Err(wwmcp::fail(
+            wwmcp::Kind::NotFound,
+            format!("no tool {name}"),
+        ))
     }
     /// Draws the settings of the plugin in its card of Settings, Plugins; gives whether they
     /// changed, and the host saves them with the settings of the window.
@@ -335,7 +364,8 @@ pub struct Loaded {
     /// The name of its DLL without the extension: the key of its settings.
     pub id: String,
     pub file: PathBuf,
-    pub plugin: Box<dyn Plugin>,
+    /// Shared with the server of the tools, whose threads call its tools.
+    pub plugin: Arc<dyn Plugin>,
     /// Where its DLL comes from; none for a plugin the program made itself.
     pub origin: Option<Origin>,
 }
@@ -457,7 +487,7 @@ impl Plugins {
         self.loaded.push(Loaded {
             id,
             file,
-            plugin,
+            plugin: Arc::from(plugin),
             origin: None,
         });
     }
@@ -581,24 +611,51 @@ fn load(path: &Path) -> Result<Box<dyn Plugin>, String> {
             text
         }
     })?;
-    // A plugin of the stable interface (ww.h) exports `ww_plugin_get` and no `ww_plugin`.
-    // SAFETY: `ww_plugin_get` is declared by ww.h with this signature; the host table it takes is
-    // the static data of this runtime, and the table it gives is the plugin's static data, which
-    // lives while the DLL does, and the DLL is never unloaded.
-    let stable = unsafe {
+    // A plugin of the stable interface (ww.h) exports `ww_plugin_get`, `ww_tools_get` or both,
+    // and no `ww_plugin`. Each gets a table of the host that names it, for its calls of tools.
+    let id = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    // SAFETY: the two functions are declared by ww.h with these signatures; the host table they
+    // take lives for the run, and the tables they give are the plugin's static data, which lives
+    // while the DLL does, and the DLL is never unloaded.
+    let (stable, tools) = unsafe {
         type Get =
             unsafe extern "C" fn(*const crate::stable::WwHost) -> *const crate::stable::WwPlugin;
-        library
-            .get::<Get>(b"ww_plugin_get\0")
-            .ok()
-            .map(|get| get(crate::stable::host()))
+        type GetTools =
+            unsafe extern "C" fn(*const crate::stable::WwHost) -> *const crate::stable::WwTools;
+        let views = library.get::<Get>(b"ww_plugin_get\0").ok();
+        let tools = library.get::<GetTools>(b"ww_tools_get\0").ok();
+        let host = if views.is_some() || tools.is_some() {
+            crate::stable::host_for(&id)
+        } else {
+            std::ptr::null()
+        };
+        (views.map(|get| get(host)), tools.map(|get| get(host)))
     };
-    if let Some(table) = stable {
-        if table.is_null() {
-            return Err("ww_plugin_get gave no table".to_owned());
-        }
-        // SAFETY: see above; the table is checked by `wrap` before it is used.
-        let plugin = unsafe { crate::stable::wrap(&*table) }?;
+    if stable.is_some() || tools.is_some() {
+        // SAFETY: see above; each table is checked by `wrap` or `wrap_tools` before it is used.
+        let tools = match tools {
+            Some(table) if table.is_null() => return Err("ww_tools_get gave no table".to_owned()),
+            Some(table) => Some(unsafe { crate::stable::wrap_tools(&*table) }?),
+            None => None,
+        };
+        let plugin = match (stable, tools) {
+            (Some(table), _) if table.is_null() => {
+                return Err("ww_plugin_get gave no table".to_owned());
+            }
+            (Some(table), tools) => {
+                // SAFETY: see above.
+                let plugin = unsafe { crate::stable::wrap(&*table) }?;
+                match tools {
+                    Some(t) => plugin.with_tools(t),
+                    None => plugin,
+                }
+            }
+            (None, Some(tools)) => crate::stable::Stable::tools_only(tools),
+            (None, None) => unreachable!("one of the tables is there"),
+        };
         std::mem::forget(library);
         return Ok(Box::new(plugin));
     }

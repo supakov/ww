@@ -4,7 +4,8 @@
 //! tab of the widgets and the documents of the window (the settings, the editor of a theme, the
 //! pages of its embedded guide). It embeds its guide, the translations of its texts and its samples
 //! (`FILES`), adds a colour to the themes, two plugins of its own and a section of its settings,
-//! and runs a count in the background.
+//! runs a count in the background, and serves the tools of its window, of its own and of its
+//! plugins over MCP (`HostMcp`, the tab MCP server).
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -12,7 +13,7 @@ use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use wwrt::egui::{self, Color32};
-use wwrt::host::{self, HostAct, HostDoc, PluginApp, PluginSettings};
+use wwrt::host::{self, HostAct, HostDoc, HostMcp, PluginApp, PluginSettings};
 use wwrt::plugin::Plugins;
 use wwrt::serde::{Deserialize, Serialize};
 use wwrt::ww::clock::Instant;
@@ -27,6 +28,7 @@ use wwrt::ww::{
     App, Document, Draft, Job, Messages, Nav, Question, Search, Shell, ShellAct, ShellDoc, icons,
     keys, session,
 };
+use wwrt::wwmcp::{self, Args, Info, Kind, Mode, Outcome, ToolDef, fail};
 
 use crate::bundle::BundlePlugin;
 use crate::texts::TextsPlugin;
@@ -257,6 +259,33 @@ pub struct Demo {
     /// The files named on the command line, opened after the session is restored.
     files: Vec<PathBuf>,
     count: Option<Count>,
+    /// The MCP server: the tools of the window, `new_note` and the tools of the plugins.
+    mcp: HostMcp,
+}
+
+/// What the server says of the program at `initialize`.
+pub fn info() -> Info {
+    Info {
+        name: String::from("ww-demo"),
+        version: VERSION.to_owned(),
+        instructions: "The demo of W#. list_files names the tabs of its window; open_file, close_file and save_file open, close and save them; new_note opens a note with a text; the plugins add tools of their own.".to_owned(),
+    }
+}
+
+/// The tools of the program itself that act on its window, answered by `program_tool`.
+pub fn demo_tools() -> Vec<ToolDef> {
+    vec![
+        ToolDef::new(
+            "new_note",
+            "notes",
+            "Opens a new note in a tab of the window with a text.",
+            wwmcp::schema(
+                wwrt::serde_json::json!({ "text": wwmcp::text("The text of the note") }),
+                &[],
+            ),
+        )
+        .mode(Mode::Edit),
+    ]
 }
 
 /// The plugins of a folder the settings trust, and the two the program makes itself.
@@ -275,10 +304,12 @@ pub fn own_plugins(plugins: &mut Plugins) {
 impl Demo {
     pub fn new(plugins: Arc<Plugins>, files: Vec<PathBuf>) -> Self {
         style::install_colors(&COLORS);
+        let mcp = HostMcp::new(info(), &plugins, demo_tools(), Vec::new());
         Self {
             plugins,
             files,
             count: None,
+            mcp,
         }
     }
 
@@ -412,6 +443,32 @@ impl PluginApp for Demo {
 
     fn plugin_settings_mut(extra: &mut Extra) -> &mut PluginSettings {
         &mut extra.host
+    }
+
+    fn mcp(&self) -> Option<&HostMcp> {
+        Some(&self.mcp)
+    }
+
+    fn mcp_mut(&mut self) -> Option<&mut HostMcp> {
+        Some(&mut self.mcp)
+    }
+
+    /// `new_note`: a note of the text in a new tab.
+    fn program_tool(
+        &mut self,
+        shell: &mut Shell<Self>,
+        tool: &str,
+        args: &wwrt::serde_json::Value,
+    ) -> Outcome {
+        if tool != "new_note" {
+            return Err(fail(Kind::NotFound, format!("no tool {tool}")));
+        }
+        let text = Args(args).optional_text("text");
+        shell.open_tab(Doc::Note(Box::new(TextDoc::new(text, None))));
+        Ok(wwrt::serde_json::json!({
+            "tab": shell.active + 1,
+            "title": shell.docs[shell.active].title(),
+        }))
     }
 }
 

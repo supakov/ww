@@ -18,6 +18,8 @@ kittest = ["dep:egui_kittest"]
 
 [dependencies]
 ww = { path = "../ww" }
+# The server of the tools of a program and of its plugins, with its tab (wwrt::wwmcp).
+wwmcp = { path = "../wwmcp", features = ["ui"] }
 egui_kittest = { version = "0.36", features = ["eframe", "wgpu", "snapshot"], optional = true }
 libloading = "0.8"
 serde = { version = "1", features = ["derive"] }

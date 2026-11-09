@@ -1,8 +1,8 @@
 # The stable interface of the plugins: `ww.h`
 
 A plugin of the stable interface is a DLL of any language with a C FFI (C, C++, Rust of any
-toolchain, Zig, Go, Free Pascal and Delphi, C# with Native AOT) that exports one function,
-`ww_plugin_get`, declared by `stable/ww.h`. Unlike a native plugin (docs/plugins.md) it shares no
+toolchain, Zig, Go, Free Pascal and Delphi, C# with Native AOT) that exports `ww_plugin_get` (its
+views), `ww_tools_get` (its tools, section 2a), or both, declared by `stable/ww.h`. Unlike a native plugin (docs/plugins.md) it shares no
 crate with the host, so it is built once and loads into every program on W# that knows its
 version of the interface, whatever compiler built either. It draws a picture of RGBA pixels and
 names the controls of its bar; the host draws them, hands the view the keys and the mouse of its
@@ -43,6 +43,8 @@ for the run too.
 | `slice(source, offset, length)` | a part of a source as a source of its own, reading the same blocks |
 | `close_source(source)` | frees a source of `open_file` or `slice`; the source given to `open_bytes` is the host's |
 | `cache(out)` | the state of the cache (`ww_cache`): the size of a block, the budget, the bytes and the blocks in memory, the files open, the blocks read from the disk and found in memory |
+| `call_tool(self, name, args, answer)` | calls a tool of the program by its name as the plugin (`self` is the field of the table, which names the plugin): `args` a JSON object, the answer (a JSON value, or the message of the error) written into `*answer`; gives `WW_TOOL_OK` or the kind of the error. The switches, the mode and the options of the server apply |
+| `free_text(text)` | frees an answer of `call_tool` |
 
 A `ww_source` is some bytes: its `length`, a `read(self, offset, out, count)` that copies at
 most `count` bytes and gives how many, the file they come from (`path`, NULL for bytes in memory)
@@ -50,6 +52,27 @@ and where they start in it (`offset`). The source given to `open_bytes` is a par
 another view offers (a selection of a hex view, a part of a bundle) or a file a plugin embeds,
 read through the cache, never copied: a view reads the blocks it shows and the rest stays on the
 disk. The user sets the size of a block and the budget of the cache in the settings of the host.
+
+## 2a. Tools
+
+`ww_tools_get(const ww_host *host)` gives the table of the tools of the plugin, `ww_tools`, which
+lives for the run: the program serves them to AI agents over MCP and calls them by their names
+(docs/mcp.md). A DLL may export it alone (tools without a view), `ww_plugin_get` alone, or both.
+
+| Field | What |
+|---|---|
+| `api_version`, `size` | `WW_API_VERSION` and `sizeof(ww_tools)` |
+| `name` | the name of the source of the tools in the tab of the server |
+| `tools`, `tool_count` | `ww_tool`: a name (unique in the program), a description for the agent, the JSON schema of its arguments (an object), a group, the mode it needs (`WW_MODE_READ`, `WW_MODE_EDIT`, `WW_MODE_FILES`) and the options it needs (`"key=value,key=value"`, or NULL) |
+| `options`, `option_count` | `ww_option`: a key, a title, the values (the weakest first) with their names, or none for a text, the initial value and a help line |
+| `call(tool, args, options, answer)` | runs a tool after the host checked the switches, the mode and the options: the arguments and the values of the options of the plugin as JSON objects; the answer (a JSON value, or the message of the error) into `*answer`, freed by the host with `free_answer`; gives `WW_TOOL_OK` (0) or the kind of the error (`WW_TOOL_INVALID`, `WW_TOOL_NOT_FOUND`, `WW_TOOL_NOT_ALLOWED`, `WW_TOOL_READ_FAILED`, `WW_TOOL_WRITE_FAILED`, `WW_TOOL_FAILED`) |
+| `free_answer(answer)` | frees an answer of `call` |
+
+`call` comes from any thread of the host, several at once, and a tool may call another tool of
+the program through `call_tool` of the host: the plugin keeps the state of its tools safe for
+threads. The example in C has three tools (how fast a point leaves the set, the set drawn in
+letters, its sample opened in a tab through `call_tool`) and the option `limit`, the most
+iterations a call may ask.
 
 ## 3. The rules
 
@@ -165,7 +188,12 @@ A type implements `ww_stable::View` (`frame` from an `Input` to a `Frame`: a `Pi
 `control`), and `ww_stable::plugin!(View, Plugin { .. })` names the plugin: its name, its
 `Format`s, its `File`s, `open` (a path to a view), `open_bytes` (a `Source`, a name and a MIME type
 to a view, or `None`) and `sniff` (the first bytes to a type, or `None`). `ww_stable::open_file`
-reads a file through the cache of the host and `ww_stable::cache` tells its state. The crate
+reads a file through the cache of the host and `ww_stable::cache` tells its state.
+`ww_stable::tools!(Tools { .. })` names its tools (section 2a): the name of the source, the
+`Tool`s, the `ToolOption`s and the function that runs a tool (its name, its arguments and the
+options as JSON texts to the answer, or the kind of the error with its message);
+`ww_stable::call_tool` calls a tool of the program by its name. `examples/ww-grey` has one,
+`grey_cache`, the state of the cache of the host. The crate
 keeps the texts and the controls of a frame until the next call on the view, reads and writes
 the structures by the sizes the host gives, and turns a panic into the line *the plugin stopped*
 of its view. The documentation of the crate holds a whole plugin.

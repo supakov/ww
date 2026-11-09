@@ -1,0 +1,22 @@
+[package]
+name = "wwmcp"
+description = "The MCP server of W#: the tools of a program and of its plugins over stdio or loopback HTTP, its configuration file, journal and log, and (feature ui) its tab"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[features]
+# The tab of the server in a window of W# (wwmcp::ui): the configuration, the sources of tools with
+# their switches and options, a call of a tool by hand, the journal and the details of a call.
+ui = ["dep:ww"]
+
+[dependencies]
+ww-base = { path = "../ww-base" }
+ww = { path = "../ww", optional = true, default-features = false }
+serde.workspace = true
+serde_json.workspace = true
+# The token of the HTTP transport, from the random source of the system.
+getrandom = "0.4"

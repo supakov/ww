@@ -362,7 +362,208 @@ pub type OpenBytes<V> = fn(Source, &str, &str) -> Result<V, String>;
 /// The function of a plugin that finds a type of its formats in the first bytes of a file.
 pub type Sniff = fn(&[u8]) -> Option<&'static str>;
 
-/// The table of the host, set by `ww_plugin_get`.
+/// A tool of a plugin (`ww.h`, `ww_tool`): its name, its description for the agent, the JSON schema
+/// of its arguments, its group, the mode of the server it needs (`MODE_READ`, `MODE_EDIT`,
+/// `MODE_FILES`) and the options it needs (`"key=value,key=value"`, empty for none).
+pub struct Tool {
+    pub name: &'static str,
+    pub description: &'static str,
+    pub schema: &'static str,
+    pub group: &'static str,
+    pub mode: u32,
+    pub needs: &'static str,
+}
+
+/// An option of the tools of a plugin: an access setting a tool needs, or a value a tool reads;
+/// no values for a text.
+pub struct ToolOption {
+    pub key: &'static str,
+    pub title: &'static str,
+    pub values: &'static [&'static str],
+    pub labels: &'static [&'static str],
+    pub initial: &'static str,
+    pub help: &'static str,
+}
+
+/// The modes of the server a tool needs.
+pub const MODE_READ: u32 = 0;
+pub const MODE_EDIT: u32 = 1;
+pub const MODE_FILES: u32 = 2;
+
+/// The kinds of an error of a tool (`WW_TOOL_*`).
+pub const TOOL_INVALID: i32 = 1;
+pub const TOOL_NOT_FOUND: i32 = 2;
+pub const TOOL_NOT_ALLOWED: i32 = 3;
+pub const TOOL_READ_FAILED: i32 = 4;
+pub const TOOL_WRITE_FAILED: i32 = 5;
+pub const TOOL_FAILED: i32 = 6;
+
+/// The function of a plugin that runs one of its tools: its name, its arguments and the values
+/// of the options of the plugin as JSON objects, to the answer (a JSON value) or the kind of the
+/// error with its message.
+pub type RunTool = fn(&str, &str, &str) -> Result<String, (i32, String)>;
+
+/// The tools of a plugin (`tools!`): the name of the source, the tools, their options and the
+/// function that runs them, which any thread of the host calls, several at once.
+pub struct Tools {
+    pub name: &'static str,
+    pub tools: &'static [Tool],
+    pub options: &'static [ToolOption],
+    pub call: RunTool,
+}
+
+/// Calls a tool of the program by its name, as the plugin: `args` a JSON object; the answer (a
+/// JSON value) or the kind of the error (`TOOL_*`) with its message. The switches, the mode and
+/// the options of the server of the program apply.
+pub fn call_tool(name: &str, args: &str) -> Result<String, (i32, String)> {
+    let table = host().filter(|h| h.call_tool.is_some());
+    let Some(table) = table else {
+        return Err((TOOL_NOT_FOUND, "the host calls no tool".to_owned()));
+    };
+    let (Some(call), name, args) = (table.call_tool, c_text(name), c_text(args)) else {
+        return Err((TOOL_NOT_FOUND, "the host calls no tool".to_owned()));
+    };
+    let mut answer: *mut c_char = std::ptr::null_mut();
+    // SAFETY: the texts live for the call; the host writes its answer, freed by its function.
+    let (code, text) = unsafe {
+        let code = call(table.this, name.as_ptr(), args.as_ptr(), &mut answer);
+        let text = text_of(answer);
+        if let (false, Some(free)) = (answer.is_null(), table.free_text) {
+            free(answer);
+        }
+        (code, text)
+    };
+    if code == 0 {
+        Ok(text)
+    } else {
+        Err((code, text))
+    }
+}
+
+/// The places of the texts of an option among the texts of a table of tools.
+struct OptionTexts {
+    key: usize,
+    title: usize,
+    values: Vec<usize>,
+    labels: Vec<usize>,
+    initial: usize,
+    help: usize,
+}
+
+/// The table of the tools of a plugin and the texts and the arrays it points to (`tools!` makes
+/// it once).
+pub struct ToolsTable {
+    tools: ffi::WwTools,
+    _texts: Vec<CString>,
+    _entries: Vec<ffi::WwTool>,
+    _options: Vec<ffi::WwOption>,
+    _lists: Vec<Vec<*const c_char>>,
+}
+
+// SAFETY: as for `Table`: written once, only read after, the pointers into its own buffers.
+unsafe impl Send for ToolsTable {}
+// SAFETY: as for Send.
+unsafe impl Sync for ToolsTable {}
+
+impl ToolsTable {
+    /// The table of the tools with the function of the table (`tools!` writes it).
+    pub fn new(tools: &Tools, call: ffi::ToolCallFn) -> ToolsTable {
+        let mut texts = vec![c_text(tools.name)];
+        let mut text = |s: &str| {
+            texts.push(c_text(s));
+            texts.len() - 1
+        };
+        let entries: Vec<[usize; 5]> = tools
+            .tools
+            .iter()
+            .map(|t| {
+                [
+                    text(t.name),
+                    text(t.description),
+                    text(t.schema),
+                    text(t.group),
+                    text(t.needs),
+                ]
+            })
+            .collect();
+        let options: Vec<OptionTexts> = tools
+            .options
+            .iter()
+            .map(|o| OptionTexts {
+                key: text(o.key),
+                title: text(o.title),
+                values: o.values.iter().map(|v| text(v)).collect(),
+                labels: o.labels.iter().map(|v| text(v)).collect(),
+                initial: text(o.initial),
+                help: text(o.help),
+            })
+            .collect();
+        let ptr = |i: usize| texts[i].as_ptr();
+        let entries: Vec<ffi::WwTool> = tools
+            .tools
+            .iter()
+            .zip(&entries)
+            .map(|(t, e)| ffi::WwTool {
+                name: ptr(e[0]),
+                description: ptr(e[1]),
+                schema: ptr(e[2]),
+                group: ptr(e[3]),
+                mode: t.mode,
+                needs: ptr(e[4]),
+            })
+            .collect();
+        let mut lists: Vec<Vec<*const c_char>> = Vec::new();
+        for o in &options {
+            lists.push(o.values.iter().map(|i| ptr(*i)).collect());
+            lists.push(o.labels.iter().map(|i| ptr(*i)).collect());
+        }
+        let options: Vec<ffi::WwOption> = options
+            .iter()
+            .enumerate()
+            .map(|(i, o)| ffi::WwOption {
+                key: ptr(o.key),
+                title: ptr(o.title),
+                values: if o.values.is_empty() {
+                    std::ptr::null()
+                } else {
+                    lists[2 * i].as_ptr()
+                },
+                labels: if o.labels.len() == o.values.len() && !o.labels.is_empty() {
+                    lists[2 * i + 1].as_ptr()
+                } else {
+                    std::ptr::null()
+                },
+                value_count: o.values.len() as u32,
+                initial: ptr(o.initial),
+                help: ptr(o.help),
+            })
+            .collect();
+        ToolsTable {
+            tools: ffi::WwTools {
+                api_version: API,
+                size: std::mem::size_of::<ffi::WwTools>() as u32,
+                name: texts[0].as_ptr(),
+                tools: entries.as_ptr(),
+                tool_count: entries.len() as u32,
+                options: options.as_ptr(),
+                option_count: options.len() as u32,
+                call: Some(call),
+                free_answer: Some(glue::free_answer),
+            },
+            _texts: texts,
+            _entries: entries,
+            _options: options,
+            _lists: lists,
+        }
+    }
+
+    /// The table for `ww_tools_get`.
+    pub fn tools(&self) -> *const ffi::WwTools {
+        &self.tools
+    }
+}
+
+/// The table of the host, set by `ww_plugin_get` or `ww_tools_get`.
 static HOST: AtomicPtr<ffi::WwHost> = AtomicPtr::new(std::ptr::null_mut());
 
 /// The table of the host, the fields its size covers.
@@ -714,6 +915,44 @@ pub mod glue {
     pub unsafe fn set_host(host: *const ffi::WwHost) {
         if !host.is_null() {
             HOST.store(host.cast_mut(), Ordering::Release);
+        }
+    }
+
+    /// Runs a tool of the plugin for the host: the texts of C to the function of the plugin,
+    /// its answer as a text the host frees with `free_answer`; a panic is an error of the tool.
+    ///
+    /// # Safety
+    /// The texts end with a zero or are null, `answer` is where the answer goes, as ww.h says.
+    pub unsafe fn call_tool(
+        tool: *const c_char,
+        args: *const c_char,
+        options: *const c_char,
+        answer: *mut *mut c_char,
+        run: RunTool,
+    ) -> i32 {
+        // SAFETY: by the contract of the caller.
+        let (tool, args, options) = unsafe { (text_of(tool), text_of(args), text_of(options)) };
+        let outcome = catch_unwind(AssertUnwindSafe(|| run(&tool, &args, &options)))
+            .unwrap_or_else(|panic| Err((TOOL_FAILED, message(panic))));
+        let (code, text) = match outcome {
+            Ok(text) => (0, text),
+            Err((code, text)) => (if code == 0 { TOOL_FAILED } else { code }, text),
+        };
+        if !answer.is_null() {
+            // SAFETY: the host gives where the answer goes.
+            unsafe { *answer = c_text(&text).into_raw() };
+        }
+        code
+    }
+
+    /// Frees an answer of a tool.
+    ///
+    /// # Safety
+    /// `answer` is a text of `call_tool`, freed once.
+    pub unsafe extern "C" fn free_answer(answer: *mut c_char) {
+        if !answer.is_null() {
+            // SAFETY: by the contract of the caller.
+            drop(unsafe { CString::from_raw(answer) });
         }
     }
 
@@ -1126,6 +1365,38 @@ macro_rules! plugin {
             TABLE
                 .get_or_init(|| $crate::Table::new::<$view>(&PLUGIN, open, open_bytes, sniff))
                 .plugin()
+        }
+    };
+}
+
+/// Names the tools of a crate: `ww_stable::tools!(Tools { .. })` exports `ww_tools_get`, which
+/// gives the host their table (`ww.h`). A crate may have tools alone, or `plugin!` too.
+#[macro_export]
+macro_rules! tools {
+    ($tools:expr $(,)?) => {
+        /// The table of the tools of the plugin (`ww.h`): the host gives its own.
+        #[allow(clippy::not_unsafe_ptr_arg_deref)]
+        #[no_mangle]
+        pub extern "C" fn ww_tools_get(
+            host: *const $crate::ffi::WwHost,
+        ) -> *const $crate::ffi::WwTools {
+            const TOOLS: $crate::Tools = $tools;
+            unsafe extern "C" fn call(
+                tool: *const ::std::ffi::c_char,
+                args: *const ::std::ffi::c_char,
+                options: *const ::std::ffi::c_char,
+                answer: *mut *mut ::std::ffi::c_char,
+            ) -> i32 {
+                // SAFETY: the host gives texts that end with a zero and where the answer goes,
+                // as ww.h says.
+                unsafe { $crate::glue::call_tool(tool, args, options, answer, TOOLS.call) }
+            }
+            static TABLE: ::std::sync::OnceLock<$crate::ToolsTable> = ::std::sync::OnceLock::new();
+            // SAFETY: the host gives its table, which lives for the run.
+            unsafe { $crate::glue::set_host(host) };
+            TABLE
+                .get_or_init(|| $crate::ToolsTable::new(&TOOLS, call))
+                .tools()
         }
     };
 }

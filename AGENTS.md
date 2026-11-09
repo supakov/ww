@@ -12,7 +12,8 @@ global). A commit made by an agent ends with
 
 W# (`ww`) is the framework of the window of programs with document tabs and the system of their
 plugins: `ww-base`, `ww`, the runtime `wwrt` (a host of plugins, the cache of the blocks, the
-native interface), the stable interface `ww.h` with its crate `ww-stable`, and the examples: the
+native interface), the MCP server `wwmcp` (the tools of a program and of its plugins), the stable
+interface `ww.h` with its crate `ww-stable`, and the examples: the
 demo program `ww-demo`, the native template `ww-hello`, the plugins of the stable interface
 `ww-mandelbrot` (C) and `ww-grey` (Rust).
 
@@ -24,6 +25,7 @@ demo program `ww-demo`, the native template `ww-hello`, the plugins of the stabl
 | Change the native interface of the plugins | `docs/plugins.md`, `crates/wwrt/src/plugin.rs`, `inner.rs`, `menus.rs`, `mime.rs`, `blocks.rs`, `trust.rs` |
 | Change the parts of a host of plugins | `docs/plugins.md` (section 8), `crates/wwrt/src/host.rs` |
 | Change the stable interface | `docs/stable.md`, `stable/ww.h`, `crates/wwrt/src/stable.rs`, `stable/rust` |
+| Change the MCP server, the tools or its tab | `docs/mcp.md`, `crates/wwmcp/src` (`server.rs`, `tools.rs`, `config.rs`, `ui.rs`, `window.rs`), `crates/wwrt/src/tools.rs`, `host.rs` (`HostMcp`) |
 | Change the embedded files | `docs/embedded.md`, `crates/ww/src/embedded.rs`, `crates/ww/src/shell/page.rs` |
 | Write a plugin | `examples/ww-hello` (native), `examples/ww-mandelbrot` (C), `examples/ww-grey` (Rust of any toolchain) |
 | Why the plugins are built so | `docs/design.md` |
@@ -43,13 +45,13 @@ demo program `ww-demo`, the native template `ww-hello`, the plugins of the stabl
 6. Every change reaches `main` through a pull request, which the owner merges. The programs on W#
    follow `main`: a change that breaks one of them is fixed there in the same round.
 7. Every text of the interface is `tr("English")` or `trf("English {name}", ...)`; the programs
-   translate the texts of W# and of wwrt (their tests read `ww::SOURCES` and `wwrt::SOURCES`), the
-   demo in Ukrainian and Russian.
+   translate the texts of W#, of wwrt and of wwmcp (their tests read `ww::SOURCES`,
+   `wwrt::SOURCES` and `wwmcp::SOURCES`), the demo in Ukrainian and Russian.
 8. An agent changes no setting of the Windows it works on, starts no window there and installs no
    toolchain there without the word of the owner of that computer; the tests draw without a
    screen.
 9. The documents hold the current state; the history of the changes is in `docs/releases/`.
-10. Versions: `version` of the workspace (0.1.47 on 09.11.2026) grows with every pull request
+10. Versions: `version` of the workspace (0.1.48 on 09.11.2026) grows with every pull request
     that reaches `main`. An agent changes the third number alone; the first and the second
     change only on the word of the owner. `wwrt::plugin::ABI` names it. The interface of the
     plugins (`wwrt::plugin::API`, `WW_API_VERSION`) stays 1 until the first release; the crate
@@ -87,4 +89,4 @@ The programs on W# take the branch `main` as a git dependency. A change of W# th
 interface (the trait `App`, the native or the stable interface of the plugins, `ShellDoc`,
 `ShellAct`) is checked against them before its pull request: their checks with the dependency on
 the branch of the change (a `[patch]` of the git source to the local clone, then `cargo update`),
-and their texts translated for the new literals of `ww` and `wwrt`.
+and their texts translated for the new literals of `ww`, `wwrt` and `wwmcp`.

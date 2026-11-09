@@ -119,6 +119,7 @@ impl Inner {
             plugins: host.plugins,
             every_settings: host.every_settings,
             depth: self.depth,
+            plugin_id: &self.plugin_id,
         };
         let title = self.title();
         ui.push_id(self.id, |ui| {

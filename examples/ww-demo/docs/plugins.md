@@ -40,4 +40,26 @@ Settings, Plugins can load only the plugins whose SHA-256 it lists, and those wh
 Windows trusts; the page of the plugins (in the menu) names where each one comes from, its
 formats and its pages.
 
+## The tools and the MCP server
+
+The program and its plugins serve tools to AI agents over MCP and run them by their names
+(`wwmcp`, docs/mcp.md of the repository). **MCP server** in the menu of the plugins opens its tab:
+
+- **Server**: the configuration file (`mcp\default.wwmcp` next to the program), Start and Stop of
+  the HTTP server of the window on 127.0.0.1 with its token, the mode (read, edit, files), the
+  detailed log and **Open the log**, which opens the log of today, a file of JSON Lines.
+- **Tools**: every source with its switch, the options of its card and its tools by groups, each
+  with its switch. The window gives `list_files`, `open_file`, `close_file` and `save_file`, the
+  demo `new_note`, the template `hello_greet`, `hello_count` and `hello_sample` (its options
+  Greeting and May open tabs of the window), the plugin in C `mandelbrot_escape`,
+  `mandelbrot_ascii` and `mandelbrot_open` (its option limit), the plugin of stable Rust
+  `grey_cache`.
+- **Call a tool**: any tool by its name with its arguments, as a script or a plugin would; the
+  answer comes below and the call into the journal, with its details at the right.
+
+Without the window, `ww-demo --mcp stdio` serves the tools of the plugins to a client that starts
+the program itself (`ww-demo --help` names the options). The sources: `app.rs` (`HostMcp`,
+`program_tool`), `examples/ww-hello`, `examples/ww-mandelbrot/mandelbrot.c`,
+`examples/ww-grey`.
+
 Back to [the guide](guide.md).

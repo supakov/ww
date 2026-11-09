@@ -7,8 +7,10 @@
 //! its context menu in a submenu, Open the file with and a submenu of each plugin that has items
 //! (`view_menu`, `plugins_menu`); a file of a set of embedded files opened by the plugin of its
 //! type (`open_embedded`); the section Plugins of the settings with the trust of the plugins, the
-//! cache of the blocks and the card of each plugin (`settings_section`); the acts of all of them
-//! (`HostAct`, `apply`).
+//! cache of the blocks and the card of each plugin (`settings_section`); the server of the tools
+//! of the program and of its plugins with its tab, the tools of the window (open, close and save a
+//! file, list the tabs) and a start without the window (`HostMcp`, `serve_mcp`); the acts of all
+//! of them (`HostAct`, `apply`).
 //!
 //! A program keeps `HostDoc` in a variant of its documents, `HostAct` in a variant of its acts
 //! and `PluginSettings` among the fields of its settings, and names them through `PluginApp`.
@@ -30,6 +32,9 @@ use crate::egui;
 use crate::menus::{self, Choice, Picked};
 use crate::plugin::{self, Host, Plugins, Request, Step, View};
 use crate::trust::{Origin, Signature, Trust};
+use crate::wwmcp::ui::{McpAct, McpPanel};
+use crate::wwmcp::window::{ProgramTools, WindowBridge, WindowTools};
+use crate::wwmcp::{self, Info, Server, Source};
 
 /// The number of the menu Open with of the bar (`App::menu_popup`), apart from the ones of a
 /// program.
@@ -70,10 +75,83 @@ pub struct FileDoc {
     pub view: Box<dyn View>,
 }
 
-/// A tab of the host: a file or some bytes by a plugin, or the page of the plugins.
+/// A tab of the host: a file or some bytes by a plugin, the page of the plugins, or the tab of the
+/// MCP server with the search of its journal.
 pub enum HostDoc {
     File(FileDoc),
     Plugins,
+    Mcp(Search),
+}
+
+/// The MCP server of a program with plugins: its tab (`McpPanel`), the bridge of the tools of its
+/// window and the program's own sources of tools.
+pub struct HostMcp {
+    pub panel: McpPanel,
+    pub bridge: Arc<WindowBridge>,
+    pub own: Vec<Arc<dyn Source>>,
+}
+
+impl HostMcp {
+    /// The server of a program: the tools of its window, the program's tools that act on its
+    /// state (`program`, answered by `PluginApp::program_tool`), its other sources (`own`) and
+    /// the ones of its plugins, with the configuration `mcp/default.wwmcp` next to the
+    /// executable; the server is installed for the calls of the plugins
+    /// (`crate::tools::install`).
+    pub fn new(
+        info: Info,
+        plugins: &Plugins,
+        program: Vec<wwmcp::ToolDef>,
+        mut own: Vec<Arc<dyn Source>>,
+    ) -> Self {
+        let bridge = WindowBridge::new();
+        if !program.is_empty() {
+            let tools = ProgramTools {
+                id: info.name.clone(),
+                title: info.name.clone(),
+                tools: program,
+                bridge: bridge.clone(),
+            };
+            own.insert(0, Arc::new(tools));
+        }
+        let server = Arc::new(server_of(info.clone(), Some(&bridge), &own, plugins));
+        crate::tools::install(server.clone());
+        let path = wwmcp::config::Config::default_path(&ww::folders::exe_dir());
+        let panel = McpPanel::new(path, &info.name, server);
+        Self { panel, bridge, own }
+    }
+}
+
+/// A server of the tools of a program: the tools of its window when it has one, its own sources,
+/// then the ones of its plugins.
+pub fn server_of(
+    info: Info,
+    window: Option<&Arc<WindowBridge>>,
+    own: &[Arc<dyn Source>],
+    plugins: &Plugins,
+) -> Server {
+    let mut server = Server::new(info, wwmcp::Config::default());
+    if let Some(bridge) = window {
+        server = server.with(WindowTools::new(bridge.clone()));
+    }
+    server
+        .with_all(own.iter().cloned())
+        .with_all(plugins.sources())
+}
+
+/// `PROGRAM --mcp ...` (the arguments after `--mcp`): the tools of the program and of its plugins
+/// without the window, by the transport of the configuration, until the client stops.
+pub fn serve_mcp(
+    info: Info,
+    plugins: &Plugins,
+    own: Vec<Arc<dyn Source>>,
+    args: &[String],
+) -> Result<(), String> {
+    let server = server_of(info, None, &own, plugins);
+    let config = wwmcp::cli::config(args, &ww::folders::exe_dir(), server.sources())?;
+    server.set_config(config);
+    let server = Arc::new(server);
+    crate::tools::install(server.clone());
+    wwmcp::cli::serve(server)
 }
 
 impl Document for HostDoc {
@@ -81,13 +159,14 @@ impl Document for HostDoc {
         match self {
             HostDoc::File(d) => d.name.clone(),
             HostDoc::Plugins => tr("Plugins").to_owned(),
+            HostDoc::Mcp(_) => tr("MCP server").to_owned(),
         }
     }
 
     fn path(&self) -> Option<&Path> {
         match self {
             HostDoc::File(d) => d.path.as_deref(),
-            HostDoc::Plugins => None,
+            HostDoc::Plugins | HostDoc::Mcp(_) => None,
         }
     }
 
@@ -95,6 +174,7 @@ impl Document for HostDoc {
         match self {
             HostDoc::File(d) => d.view.search(),
             HostDoc::Plugins => None,
+            HostDoc::Mcp(search) => Some(search),
         }
     }
 
@@ -103,6 +183,7 @@ impl Document for HostDoc {
             HostDoc::File(d) if d.view.browses() => "\u{1F5BC}",
             HostDoc::File(_) => icons::PAGE,
             HostDoc::Plugins => icons::PACKAGE,
+            HostDoc::Mcp(_) => icons::LINK,
         }
     }
 
@@ -110,6 +191,7 @@ impl Document for HostDoc {
         match self {
             HostDoc::File(_) => "Search the text (Ctrl+F)",
             HostDoc::Plugins => "",
+            HostDoc::Mcp(_) => "Search the journal",
         }
     }
 }
@@ -146,6 +228,10 @@ pub enum HostAct {
     Plugins,
     /// Every block leaves the cache.
     ClearCache,
+    /// The tab of the MCP server in front.
+    OpenMcp,
+    /// An act of the tab of the MCP server.
+    Mcp(McpAct),
 }
 
 /// The parts of a program the host needs: its plugins, where its tabs of the host and its acts
@@ -161,6 +247,26 @@ pub trait PluginApp: App {
     fn host_act(act: HostAct) -> Self::Act;
     fn plugin_settings(extra: &Self::Extra) -> &PluginSettings;
     fn plugin_settings_mut(extra: &mut Self::Extra) -> &mut PluginSettings;
+    /// The MCP server of the program, when it has one (`HostMcp::new` at its start).
+    fn mcp(&self) -> Option<&HostMcp> {
+        None
+    }
+    fn mcp_mut(&mut self) -> Option<&mut HostMcp> {
+        None
+    }
+    /// Answers a tool of the program's own that acts on its state (`WindowAsk::Program` of its
+    /// source), at a frame of the window.
+    fn program_tool(
+        &mut self,
+        _shell: &mut Shell<Self>,
+        tool: &str,
+        _args: &Value,
+    ) -> wwmcp::Outcome {
+        Err(wwmcp::fail(
+            wwmcp::Kind::NotFound,
+            format!("no tool {tool}"),
+        ))
+    }
 }
 
 fn file_name(path: &Path) -> String {
@@ -408,6 +514,27 @@ fn browse<A: PluginApp>(app: &A, shell: &mut Shell<A>, step: Step) {
     }
 }
 
+/// The tab of the MCP server in front: its tab, or a new one.
+pub fn mcp_tab<A: PluginApp>(shell: &mut Shell<A>) {
+    if !shell.focus_tab(|d| matches!(A::host_doc(d), Some(HostDoc::Mcp(_)))) {
+        shell.open_tab(A::from_host_doc(HostDoc::Mcp(Search::default())));
+    }
+}
+
+/// Answers the calls of the tools of the window waiting, and saves the configuration of the MCP
+/// server once it changed: at every frame, from `draw`.
+fn mcp_frame<A: PluginApp>(app: &mut A, shell: &mut Shell<A>, ctx: &egui::Context) {
+    let Some(bridge) = app.mcp().map(|m| m.bridge.clone()) else {
+        return;
+    };
+    wwmcp::window::answer(app, shell, &bridge, ctx, &mut |app, shell, tool, args| {
+        app.program_tool(shell, tool, args)
+    });
+    if let Some(m) = app.mcp_mut() {
+        m.panel.persist();
+    }
+}
+
 /// The page of the plugins in front: its tab, or a new one.
 pub fn plugins_tab<A: PluginApp>(shell: &mut Shell<A>) {
     if !shell.focus_tab(|d| matches!(A::host_doc(d), Some(HostDoc::Plugins))) {
@@ -530,13 +657,15 @@ pub fn plugins_page<A: PluginApp>(app: &A, ui: &mut egui::Ui, acts: &mut Vec<A::
     });
 }
 
-/// Draws the active tab when it is a tab of the host; false when it is not.
+/// Draws the active tab when it is a tab of the host; false when it is not. It answers the tools
+/// of the window first, so a program calls it at every frame.
 pub fn draw<A: PluginApp>(
-    app: &A,
+    app: &mut A,
     shell: &mut Shell<A>,
     ui: &mut egui::Ui,
     acts: &mut Vec<A::Act>,
 ) -> bool {
+    mcp_frame(app, shell, ui.ctx());
     let (wrap_lines, page_width) = (shell.settings.wrap_lines, shell.settings.page_width);
     let every = A::plugin_settings(&shell.settings.extra).plugins.clone();
     let plugins = app.plugins().clone();
@@ -548,12 +677,28 @@ pub fn draw<A: PluginApp>(
                 .unwrap_or(Value::Null);
             let mut host =
                 Host::new(wrap_lines, page_width, &settings).with_plugins(&plugins, &every);
+            host.plugin_id = &plugins.loaded[doc.plugin].id;
             doc.view.ui(ui, &mut host);
             acts.extend(requested::<A>(host.requests));
             true
         }
         Some(HostDoc::Plugins) => {
             plugins_page(app, ui, acts);
+            true
+        }
+        Some(HostDoc::Mcp(search)) => {
+            if let Some(m) = app.mcp_mut() {
+                let mut own = Vec::new();
+                wwmcp::ui::draw(
+                    ui,
+                    &mut m.panel,
+                    search,
+                    &mut own,
+                    &mut |_| {},
+                    &mut |_, _| {},
+                );
+                acts.extend(own.into_iter().map(|a| A::host_act(HostAct::Mcp(a))));
+            }
             true
         }
         None => false,
@@ -665,6 +810,10 @@ pub fn plugins_menu<A: PluginApp>(app: &A, ui: &mut egui::Ui, acts: &mut Vec<A::
     }
     let act = A::host_act(HostAct::Plugins);
     menu_item(ui, icons::PACKAGE, tr("Plugins"), "", act, acts);
+    if app.mcp().is_some() {
+        let act = A::host_act(HostAct::OpenMcp);
+        menu_item(ui, icons::LINK, tr("MCP server"), "", act, acts);
+    }
 }
 
 /// The plugin of the tab in front and what its view says, for the status bar.
@@ -796,7 +945,7 @@ pub fn settings_section<A: PluginApp>(app: &A, shell: &mut Shell<A>, ui: &mut eg
 }
 
 /// Runs an act of the host.
-pub fn apply<A: PluginApp>(app: &A, shell: &mut Shell<A>, act: HostAct) {
+pub fn apply<A: PluginApp>(app: &mut A, shell: &mut Shell<A>, act: HostAct) {
     let (wrap_lines, page_width) = (shell.settings.wrap_lines, shell.settings.page_width);
     let own = A::plugin_settings(&shell.settings.extra).clone();
     let every = &own.plugins;
@@ -897,6 +1046,16 @@ pub fn apply<A: PluginApp>(app: &A, shell: &mut Shell<A>, act: HostAct) {
         HostAct::Browse(step) => browse(app, shell, step),
         HostAct::Plugins => plugins_tab(shell),
         HostAct::ClearCache => blocks::cache().clear(),
+        HostAct::OpenMcp => mcp_tab(shell),
+        // The log of the server opens as any file: JSON Lines by a plugin of texts of a tree.
+        HostAct::Mcp(McpAct::OpenLog(path)) => open_path(app, shell, path),
+        HostAct::Mcp(act) => {
+            if let Some(m) = app.mcp_mut()
+                && let Some(line) = m.panel.apply(act)
+            {
+                shell.status = line;
+            }
+        }
     }
 }
 

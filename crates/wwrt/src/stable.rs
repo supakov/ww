@@ -2,13 +2,17 @@
 //! language with a C FFI that exports `ww_plugin_get`. The structures here are the ones of the
 //! header; `wrap` makes of such a table an ordinary `Plugin`, whose views draw the picture of the
 //! plugin as a texture, its controls as widgets of egui over the view, and give it the keys and
-//! the mouse of the view. The table of the host (`host`) lends every such plugin the cache of the
-//! blocks of the program: a file read in blocks, a part of one, the state of the cache.
+//! the mouse of the view. The table of the host (`host_for`) lends every such plugin the cache of
+//! the blocks of the program (a file read in blocks, a part of one, the state of the cache) and
+//! the call of a tool of the program by its name. A DLL that exports `ww_tools_get` has tools
+//! (`wrap_tools`): the plugin made of it serves them, with views or without.
 
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::path::Path;
 
+use serde_json::Value;
 use ww::embedded::{self, Embedded};
+use wwmcp::{Call, Choice, Kind, Mode, Outcome, ToolDef, ToolError};
 
 use crate::blocks::{self, BlockFile};
 use crate::egui::{self, Key, Pos2, Rect, Vec2};
@@ -37,6 +41,9 @@ pub const TOGGLE: u32 = 1;
 pub const SLIDER: u32 = 2;
 pub const CHOICE: u32 = 3;
 pub const LABEL: u32 = 4;
+pub const MODE_READ: u32 = 0;
+pub const MODE_EDIT: u32 = 1;
+pub const MODE_FILES: u32 = 2;
 
 /// The most formats, extensions, types and files of a table the host reads.
 const MOST: u32 = 64;
@@ -89,6 +96,51 @@ pub struct WwHost {
     pub slice: Option<unsafe extern "C" fn(*const WwSource, u64, u64) -> *const WwSource>,
     pub close_source: Option<unsafe extern "C" fn(*const WwSource)>,
     pub cache: Option<unsafe extern "C" fn(*mut WwCache)>,
+    /// The id of the plugin the table was given to, a text of the host, for `call_tool`.
+    pub this: *mut c_void,
+    pub call_tool: Option<CallToolFn>,
+    pub free_text: Option<unsafe extern "C" fn(*mut c_char)>,
+}
+
+/// The function of the host that calls a tool by its name for a plugin.
+pub type CallToolFn =
+    unsafe extern "C" fn(*mut c_void, *const c_char, *const c_char, *mut *mut c_char) -> i32;
+/// The function of a plugin that runs one of its tools.
+pub type ToolCallFn =
+    unsafe extern "C" fn(*const c_char, *const c_char, *const c_char, *mut *mut c_char) -> i32;
+
+#[repr(C)]
+pub struct WwTool {
+    pub name: *const c_char,
+    pub description: *const c_char,
+    pub schema: *const c_char,
+    pub group: *const c_char,
+    pub mode: u32,
+    pub needs: *const c_char,
+}
+
+#[repr(C)]
+pub struct WwOption {
+    pub key: *const c_char,
+    pub title: *const c_char,
+    pub values: *const *const c_char,
+    pub labels: *const *const c_char,
+    pub value_count: u32,
+    pub initial: *const c_char,
+    pub help: *const c_char,
+}
+
+#[repr(C)]
+pub struct WwTools {
+    pub api_version: u32,
+    pub size: u32,
+    pub name: *const c_char,
+    pub tools: *const WwTool,
+    pub tool_count: u32,
+    pub options: *const WwOption,
+    pub option_count: u32,
+    pub call: Option<ToolCallFn>,
+    pub free_answer: Option<unsafe extern "C" fn(*mut c_char)>,
 }
 
 #[repr(C)]
@@ -466,19 +518,108 @@ static HOST: HostTable = HostTable(WwHost {
     slice: Some(host_slice),
     close_source: Some(host_close_source),
     cache: Some(host_cache),
+    this: std::ptr::null_mut(),
+    call_tool: Some(host_call_tool),
+    free_text: Some(host_free_text),
 });
 
-/// The table of the host, for `ww_plugin_get`.
+/// The table of the host without a plugin named: its calls of tools are the ones of a plugin
+/// `stable`.
 pub fn host() -> *const WwHost {
     &HOST.0
 }
 
-/// A plugin of the stable interface as a plugin of wwrt.
+/// The table of the host for the plugin of an id (the name of its DLL), which its calls of tools
+/// name; it lives for the run.
+pub fn host_for(id: &str) -> *const WwHost {
+    let id = CString::new(id.replace('\0', "")).unwrap_or_default();
+    let table = WwHost {
+        this: id.into_raw().cast(),
+        ..HostTable::copy()
+    };
+    Box::leak(Box::new(table))
+}
+
+impl HostTable {
+    fn copy() -> WwHost {
+        WwHost {
+            size: HOST.0.size,
+            api_version: HOST.0.api_version,
+            open_file: HOST.0.open_file,
+            slice: HOST.0.slice,
+            close_source: HOST.0.close_source,
+            cache: HOST.0.cache,
+            this: std::ptr::null_mut(),
+            call_tool: HOST.0.call_tool,
+            free_text: HOST.0.free_text,
+        }
+    }
+}
+
+/// A text for the plugin, which it frees with `free_text`.
+fn given(text: &str) -> *mut c_char {
+    CString::new(text.replace('\0', ""))
+        .unwrap_or_default()
+        .into_raw()
+}
+
+/// `call_tool` of the host: a tool of the program by its name, as the plugin of the table.
+unsafe extern "C" fn host_call_tool(
+    this: *mut c_void,
+    name: *const c_char,
+    args: *const c_char,
+    answer: *mut *mut c_char,
+) -> i32 {
+    // SAFETY: the texts are the plugin's for the call, `this` a text of `host_for` or null.
+    let (id, name, args) = unsafe {
+        let id = if this.is_null() {
+            "stable".to_owned()
+        } else {
+            text(this.cast_const().cast())
+        };
+        (id, text(name), text(args))
+    };
+    let args = if args.trim().is_empty() {
+        Ok(Value::Object(Default::default()))
+    } else {
+        serde_json::from_str::<Value>(&args)
+            .map_err(|e| ToolError::new(Kind::Invalid, format!("the arguments are not JSON: {e}")))
+    };
+    let outcome = args.and_then(|args| crate::tools::call(&name, &args, &id));
+    let (code, text) = match outcome {
+        Ok(value) => (0, value.to_string()),
+        Err(e) => (e.kind.code(), e.message),
+    };
+    if !answer.is_null() {
+        // SAFETY: the plugin gives where the answer goes.
+        unsafe { *answer = given(&text) };
+    }
+    code
+}
+
+/// `free_text` of the host: frees a text the host gave.
+unsafe extern "C" fn host_free_text(text: *mut c_char) {
+    if !text.is_null() {
+        // SAFETY: a text of `given`, freed once.
+        drop(unsafe { CString::from_raw(text) });
+    }
+}
+
+/// A plugin of the stable interface as a plugin of wwrt: its views (a table of `ww_plugin_get`)
+/// and its tools (a table of `ww_tools_get`), either of them, or both.
 pub struct Stable {
     table: &'static WwPlugin,
     name: &'static str,
     formats: &'static [Format],
     files: Embedded,
+    tools: Option<StableTools>,
+}
+
+/// The tools of a plugin of the stable interface.
+pub struct StableTools {
+    table: &'static WwTools,
+    tools: Vec<ToolDef>,
+    options: Vec<Choice>,
 }
 
 /// The table of a plugin, the fields its size covers, the others zero.
@@ -567,7 +708,126 @@ pub unsafe fn wrap(table: &'static WwPlugin) -> Result<Stable, String> {
             name,
             formats: Box::leak(formats.into_boxed_slice()),
             files: Embedded::new(Box::leak(files.into_boxed_slice())),
+            tools: None,
         })
+    }
+}
+
+/// The table of the tools of a plugin, the fields its size covers, the others zero.
+///
+/// # Safety
+/// `table` is a table of tools as `wrap_tools` takes it.
+unsafe fn covered_tools(table: &'static WwTools) -> &'static WwTools {
+    // SAFETY: as in `covered`.
+    unsafe {
+        let mut own: WwTools = std::mem::zeroed();
+        let n = (table.size as usize).min(std::mem::size_of::<WwTools>());
+        std::ptr::copy_nonoverlapping(
+            (table as *const WwTools).cast::<u8>(),
+            (&raw mut own).cast::<u8>(),
+            n,
+        );
+        Box::leak(Box::new(own))
+    }
+}
+
+/// The tools of a table of `ww_tools_get`, after a check of its version and its function.
+///
+/// # Safety
+/// `table` lives as long as the process (a DLL never unloaded), with its texts and arrays as the
+/// header describes them.
+pub unsafe fn wrap_tools(table: &'static WwTools) -> Result<StableTools, String> {
+    if table.api_version != API {
+        return Err(format!(
+            "tools of the stable interface {}; this host knows {API}",
+            table.api_version
+        ));
+    }
+    // SAFETY: by the contract of the caller.
+    let table = unsafe { covered_tools(table) };
+    if table.call.is_none() {
+        return Err("a table of tools without its function".to_owned());
+    }
+    let mut tools = Vec::new();
+    let mut options = Vec::new();
+    // SAFETY: by the contract of the caller, the texts and the arrays are as the header says.
+    unsafe {
+        if !table.tools.is_null() {
+            for i in 0..table.tool_count.min(MOST * 4) as usize {
+                let w = &*table.tools.add(i);
+                let schema = serde_json::from_str::<Value>(&text(w.schema))
+                    .ok()
+                    .filter(Value::is_object)
+                    .unwrap_or_else(wwmcp::tools::no_arguments);
+                let mode = match w.mode {
+                    MODE_EDIT => Mode::Edit,
+                    MODE_FILES => Mode::Files,
+                    _ => Mode::Read,
+                };
+                let mut tool =
+                    ToolDef::new(&text(w.name), &text(w.group), &text(w.description), schema)
+                        .mode(mode);
+                for need in text(w.needs).split(',').filter(|n| !n.trim().is_empty()) {
+                    let (key, value) = need.split_once('=').unwrap_or((need, ""));
+                    tool = tool.needs(key.trim(), value.trim());
+                }
+                if !tool.name.is_empty() {
+                    tools.push(tool);
+                }
+            }
+        }
+        if !table.options.is_null() {
+            for i in 0..table.option_count.min(MOST) as usize {
+                let o = &*table.options.add(i);
+                let values = leaked_list(o.values, o.value_count);
+                let labels = if o.labels.is_null() {
+                    values
+                } else {
+                    leaked_list(o.labels, o.value_count)
+                };
+                let initial = text(o.initial);
+                options.push(Choice {
+                    key: text(o.key),
+                    title: text(o.title),
+                    values: values.iter().map(|v| (*v).to_owned()).collect(),
+                    labels: labels.iter().map(|v| (*v).to_owned()).collect(),
+                    default: if initial.is_empty() {
+                        values.first().map(|v| (*v).to_owned()).unwrap_or_default()
+                    } else {
+                        initial
+                    },
+                    help: text(o.help),
+                });
+            }
+        }
+    }
+    Ok(StableTools {
+        table,
+        tools,
+        options,
+    })
+}
+
+impl Stable {
+    /// A plugin of tools alone, without views: a table of views with no function.
+    pub fn tools_only(tools: StableTools) -> Stable {
+        // SAFETY: a table of integers, pointers and functions is valid when zero.
+        let table: &'static WwPlugin = Box::leak(Box::new(unsafe { std::mem::zeroed() }));
+        // SAFETY: the name is a text of the table of the tools, as the header says.
+        let name = unsafe { leaked(tools.table.name) };
+        Stable {
+            table,
+            name,
+            formats: &[],
+            files: Embedded::new(&[]),
+            tools: Some(tools),
+        }
+    }
+
+    /// The plugin with its tools.
+    pub fn with_tools(mut self, tools: StableTools) -> Stable {
+        self.tools = Some(tools);
+        self
     }
 }
 
@@ -659,6 +919,55 @@ impl Plugin for Stable {
             )
         };
         self.view(view, &mut error, Some(source))
+    }
+
+    fn tools(&self) -> Vec<ToolDef> {
+        self.tools
+            .as_ref()
+            .map(|t| t.tools.clone())
+            .unwrap_or_default()
+    }
+
+    fn tool_options(&self) -> Vec<Choice> {
+        self.tools
+            .as_ref()
+            .map(|t| t.options.clone())
+            .unwrap_or_default()
+    }
+
+    fn call_tool(&self, name: &str, args: &Value, call: &Call<'_>) -> Outcome {
+        let Some(tools) = &self.tools else {
+            return Err(ToolError::new(Kind::NotFound, format!("no tool {name}")));
+        };
+        let Some(run) = tools.table.call else {
+            return Err(ToolError::new(Kind::NotFound, format!("no tool {name}")));
+        };
+        let c = |s: String| CString::new(s.replace('\0', "")).unwrap_or_default();
+        let (tool, args) = (c(name.to_owned()), c(args.to_string()));
+        let options = c(serde_json::to_string(call.options).unwrap_or_default());
+        let mut answer: *mut c_char = std::ptr::null_mut();
+        // SAFETY: the texts live for the call; the plugin writes its answer, freed below by its
+        // own function.
+        let (code, text) = unsafe {
+            let code = run(
+                tool.as_ptr(),
+                args.as_ptr(),
+                options.as_ptr(),
+                &raw mut answer,
+            );
+            let text = text(answer);
+            if !answer.is_null()
+                && let Some(free) = tools.table.free_answer
+            {
+                free(answer);
+            }
+            (code, text)
+        };
+        if code == 0 {
+            Ok(serde_json::from_str(&text).unwrap_or(Value::String(text)))
+        } else {
+            Err(ToolError::new(Kind::of_code(code), text))
+        }
     }
 
     fn sniff(&self, head: &[u8]) -> Option<&'static str> {

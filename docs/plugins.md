@@ -73,7 +73,7 @@ The version stays 1 (`wwrt::plugin::API`) until the first release of W#; the bui
   requests), `translations` (the code and a file of each language, added to the window at the
   load), `has_settings` and `settings_ui` (its card in Settings, Plugins; the host keeps the JSON
   object of each plugin by the name of its DLL; `plugin::setting` and `set_setting` read and
-  write a field).
+  write a field), `tools`, `tool_options` and `call_tool` (section 10).
 - `View`: `ui` with a `Host` (Wrap lines, the width of pages, the settings of the plugin, the
   plugins of the window with the settings of each, the depth of the view, and the requests of the
   view), `tools` (the bar of the tab; `pressed` names the switches that are on, drawn pressed),
@@ -169,8 +169,8 @@ and their origin. A plugin has the rights of the program: it is native code in i
 
 The parts every program with plugins has, for its `ww::App` to call:
 
-- `HostDoc` (a file or some bytes by a plugin, `FileDoc`, and the page of the plugins) in a
-  variant of the documents of the program, `HostAct` in a variant of its acts, `PluginSettings`
+- `HostDoc` (a file or some bytes by a plugin, `FileDoc`, the page of the plugins and the tab of
+  the MCP server) in a variant of the documents of the program, `HostAct` in a variant of its acts, `PluginSettings`
   (the settings of every plugin, the trust, the limits of the cache) flattened into its settings,
   all named through the trait `PluginApp`.
 - `load` (the plugins of a folder the settings trust, the limits of the cache set first),
@@ -183,6 +183,9 @@ The parts every program with plugins has, for its `ww::App` to call:
   each plugin), `apply`.
 - For the command line: `attach_console`, `plugins_dir`, `list` (the text of `--plugins`) and
   `probe` (a file opened and drawn in three frames without a window, with the times).
+- The MCP server (docs/mcp.md, section 8): `HostMcp` (the tab, the tools of the window, the
+  program's tools, the ones of the plugins), `PluginApp::mcp`, `mcp_mut` and `program_tool`,
+  `mcp_tab`, `serve_mcp` for `--mcp`.
 
 The demo (`examples/ww-demo/src/app.rs`) is such a program, with two plugins it makes itself
 (`Plugins::add`): a plugin of bundles of parts whose view shows the part chosen inside itself and
@@ -221,3 +224,22 @@ The rules of a native plugin:
 
 The template: copy `examples/ww-hello` to a folder of the workspace, give the package its name,
 write the plugin, then `cargo test -p <name>` and `cargo build --release -p <name>`.
+
+## 10. Tools
+
+A plugin may serve tools to the AI agents of its program and to a call by name (docs/mcp.md): its
+tools (`Plugin::tools`, `wwmcp::ToolDef`: a name unique in the program, a description, the schema
+of the arguments, a group, the mode and the options it needs), their options (`tool_options`,
+`wwmcp::Choice`: an access setting a tool needs, or a value it reads) and the function that runs
+them (`call_tool`, with `wwmcp::Call`: the mode of the server, the values of the options, the
+caller). The server checks the switches of the user, the mode and the options before the call;
+any thread calls it, several at once. A plugin with tools and no formats is a source of tools
+without a view.
+
+A plugin calls any tool of the program by its name: `Host::call_tool(name, args)` in a view,
+`wwrt::tools::call(name, args, id)` elsewhere (in a tool of its own, say), as the plugin `id`: the
+switches, the mode and the options apply to it as to a client. `ww-hello` has three tools: a
+greeting that reads its option `greeting`, a count of the words of a text, and its sample opened
+in a tab through the tool `open_file` of the program, which its access option `open_tabs` allows.
+The user switches the tools and sets the options in the card of the plugin of the tab of the MCP
+server; the configuration file keeps them in its branch `plugins` under the name of the DLL.

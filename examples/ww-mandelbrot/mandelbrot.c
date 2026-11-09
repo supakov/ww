@@ -7,6 +7,11 @@
  * its own and a sample. The picture is drawn in steps: blocks of 8 pixels at once, then of 4, 2
  * and 1, each frame within a few milliseconds, so the window never waits.
  *
+ * Its tools (ww_tools_get), for the MCP server of the program and a call by name: how fast a point
+ * of the plane leaves the set, the set drawn in letters, and its sample opened in a tab through
+ * the tool open_file of the program, called by its name (call_tool of ww_host). The option limit
+ * of the plugin is the most iterations a call may ask.
+ *
  * The mouse: the wheel zooms at the pointer, a drag moves the picture, Shift and a drag draws a
  * rectangle that the release zooms into, a double click centres and zooms in, the right button
  * zooms out. The keys: the arrows move, + and - zoom, Page Up and Page Down double or halve the
@@ -260,7 +265,7 @@ static const uint8_t *with_rectangle(view *v) {
     return v->shown;
 }
 
-/* The table of the host, given to ww_plugin_get. */
+/* The table of the host, given to ww_plugin_get and ww_tools_get. */
 static const ww_host *HOST;
 
 /* Whether the table of the host holds a field. */
@@ -598,4 +603,196 @@ static const ww_plugin PLUGIN = {
 WW_EXPORT const ww_plugin *ww_plugin_get(const ww_host *host) {
     HOST = host;
     return &PLUGIN;
+}
+
+/* The tools. A call comes on any thread of the host, several at once: they read nothing but
+ * their arguments. */
+
+/* The number of a key of a JSON object as an agent writes it ("key": 1.5, or "key": "1.5" as the
+ * options of the server give their values), else fallback. */
+static double json_number(const char *json, const char *key, double fallback) {
+    char quoted[72];
+    const char *at;
+    char *end;
+    double value;
+    if (!json || strlen(key) > 64) return fallback;
+    snprintf(quoted, sizeof quoted, "\"%s\"", key);
+    at = strstr(json, quoted);
+    if (!at) return fallback;
+    at = strchr(at + strlen(quoted), ':');
+    if (!at) return fallback;
+    at++;
+    while (*at == ' ' || *at == '"') at++;
+    value = strtod(at, &end);
+    return end == at ? fallback : value;
+}
+
+/* An answer the host frees with tool_free. */
+static char *answer_of(const char *text) {
+    size_t n = strlen(text) + 1;
+    char *out = (char *)malloc(n);
+    if (out) memcpy(out, text, n);
+    return out;
+}
+
+/* The iterations after which a point leaves the set, or -1 when it stays inside. */
+static int escape_of(double x0, double y0, int most) {
+    double x = 0.0, y = 0.0;
+    int i;
+    for (i = 0; i < most; i++) {
+        double xx = x * x, yy = y * y;
+        if (xx + yy > 4.0) return i;
+        y = 2.0 * x * y + y0;
+        x = xx - yy + x0;
+    }
+    return -1;
+}
+
+static int clamped(double value, int low, int high) {
+    if (!(value >= low)) return low;
+    if (value > high) return high;
+    return (int)value;
+}
+
+/* A text as a string of JSON, without its quotes: backslashes and quotes escaped. */
+static void json_escaped(const char *text, char *out, size_t size) {
+    size_t n = 0;
+    for (; *text && n + 2 < size; text++) {
+        if (*text == '\\' || *text == '"') out[n++] = '\\';
+        out[n++] = *text;
+    }
+    out[n] = 0;
+}
+
+/* mandelbrot_open: the sample into the temporary folder, opened by the tool open_file of the
+ * program, called by its name as the plugin. */
+static int32_t open_sample(char **answer) {
+    char dir[MAX_PATH], path[MAX_PATH + 32], escaped[2 * MAX_PATH + 64], args[2 * MAX_PATH + 96];
+    char *opened = NULL;
+    int32_t code;
+    FILE *f;
+    if (!HOST_HAS(call_tool) || !HOST_HAS(free_text)) {
+        *answer = answer_of("the host calls no tool");
+        return WW_TOOL_FAILED;
+    }
+    if (!GetTempPathA(MAX_PATH, dir)) {
+        *answer = answer_of("no temporary folder");
+        return WW_TOOL_WRITE_FAILED;
+    }
+    snprintf(path, sizeof path, "%sseahorse.mandel", dir);
+    f = fopen(path, "wb");
+    if (!f) {
+        *answer = answer_of("the sample was not written");
+        return WW_TOOL_WRITE_FAILED;
+    }
+    fwrite(SAMPLE, 1, sizeof SAMPLE - 1, f);
+    fclose(f);
+    json_escaped(path, escaped, sizeof escaped);
+    snprintf(args, sizeof args, "{\"path\": \"%s\"}", escaped);
+    code = HOST->call_tool(HOST->self, "open_file", args, &opened);
+    *answer = answer_of(opened ? opened : "");
+    if (opened) HOST->free_text(opened);
+    return code;
+}
+
+static int32_t tool_call(const char *tool, const char *args, const char *options, char **answer) {
+    int limit = (int)json_number(options, "limit", 1000);
+    char text[256];
+    if (strcmp(tool, "mandelbrot_escape") == 0) {
+        double x = json_number(args, "x", NAN), y = json_number(args, "y", NAN);
+        int most = clamped(json_number(args, "iterations", 256), 1, MAX_ITERATIONS);
+        int n;
+        if (isnan(x) || isnan(y)) {
+            *answer = answer_of("the arguments x and y are numbers");
+            return WW_TOOL_INVALID;
+        }
+        if (most > limit) {
+            snprintf(text, sizeof text,
+                     "at most %d iterations: the option limit of the plugin allows no more", limit);
+            *answer = answer_of(text);
+            return WW_TOOL_NOT_ALLOWED;
+        }
+        n = escape_of(x, y, most);
+        if (n < 0)
+            snprintf(text, sizeof text, "{\"inside\": true, \"iterations\": %d}", most);
+        else
+            snprintf(text, sizeof text, "{\"inside\": false, \"escaped_after\": %d}", n);
+        *answer = answer_of(text);
+        return WW_TOOL_OK;
+    }
+    if (strcmp(tool, "mandelbrot_ascii") == 0) {
+        static const char RAMP[] = " .:-=+*#%@";
+        double cx = json_number(args, "center_x", -0.5), cy = json_number(args, "center_y", 0.0);
+        double zoom = json_number(args, "zoom", 1.0);
+        int w = clamped(json_number(args, "width", 64), 8, 160);
+        int h = clamped(json_number(args, "height", 24), 4, 80);
+        int most = limit < 200 ? limit : 200;
+        size_t size = (size_t)(w + 8) * (size_t)h + 256, n;
+        char *out;
+        int row, col;
+        if (!(zoom > 0.0)) {
+            *answer = answer_of("the zoom is a number above 0");
+            return WW_TOOL_INVALID;
+        }
+        out = (char *)malloc(size);
+        if (!out) {
+            *answer = answer_of("no memory");
+            return WW_TOOL_FAILED;
+        }
+        n = (size_t)snprintf(out, size, "{\"iterations\": %d, \"lines\": [", most);
+        for (row = 0; row < h; row++) {
+            /* A letter is about twice as high as it is wide. */
+            double y = cy + (row - h / 2.0) * 2.0 * 3.0 / (zoom * w);
+            out[n++] = '"';
+            for (col = 0; col < w; col++) {
+                double x = cx + (col - w / 2.0) * 3.0 / (zoom * w);
+                int e = escape_of(x, y, most);
+                out[n++] = e < 0 ? RAMP[9] : RAMP[(e * 9) / most];
+            }
+            out[n++] = '"';
+            if (row + 1 < h) out[n++] = ',';
+        }
+        snprintf(out + n, size - n, "]}");
+        *answer = out;
+        return WW_TOOL_OK;
+    }
+    if (strcmp(tool, "mandelbrot_open") == 0) return open_sample(answer);
+    *answer = answer_of("no such tool");
+    return WW_TOOL_NOT_FOUND;
+}
+
+static void tool_free(char *answer) { free(answer); }
+
+static const ww_tool TOOLS[3] = {
+    {"mandelbrot_escape",
+     "Counts the iterations after which the point x + iy of the plane leaves the Mandelbrot set, "
+     "or says that it stays inside.",
+     "{\"type\": \"object\", \"properties\": {\"x\": {\"type\": \"number\"}, \"y\": {\"type\": "
+     "\"number\"}, \"iterations\": {\"type\": \"integer\", \"description\": \"The most "
+     "iterations, 256 by default\"}}, \"required\": [\"x\", \"y\"]}",
+     "mandelbrot", WW_MODE_READ, NULL},
+    {"mandelbrot_ascii",
+     "Draws the Mandelbrot set in letters around a centre at a zoom: a text a row, the darkest "
+     "letter inside the set.",
+     "{\"type\": \"object\", \"properties\": {\"center_x\": {\"type\": \"number\"}, "
+     "\"center_y\": {\"type\": \"number\"}, \"zoom\": {\"type\": \"number\"}, \"width\": "
+     "{\"type\": \"integer\"}, \"height\": {\"type\": \"integer\"}}}",
+     "mandelbrot", WW_MODE_READ, NULL},
+    {"mandelbrot_open",
+     "Writes the sample view of the sea horses into the temporary folder and opens it in a tab of "
+     "the window, through the tool open_file of the program.",
+     "{\"type\": \"object\", \"properties\": {}}", "mandelbrot", WW_MODE_FILES, NULL},
+};
+
+static const char *const LIMITS[3] = {"100", "1000", "10000"};
+static const char *const LIMIT_NAMES[3] = {"100 iterations", "1000 iterations",
+                                           "10000 iterations"};
+static const ww_option OPTIONS[1] = {
+    {"limit", "The most iterations a call may ask", LIMITS, LIMIT_NAMES, 3, "1000", NULL}};
+static const ww_tools TOOLS_TABLE = {WW_API_VERSION, sizeof(ww_tools), "Mandelbrot set (C)",
+                                     TOOLS, 3, OPTIONS, 1, tool_call, tool_free};
+
+WW_EXPORT const ww_tools *ww_tools_get(const ww_host *host) {
+    HOST = host;
+    return &TOOLS_TABLE;
 }

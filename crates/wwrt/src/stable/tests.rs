@@ -12,7 +12,10 @@ fn the_structures_have_the_layout_of_the_header() {
     assert_eq!(std::mem::size_of::<WwFile>(), 24);
     assert_eq!(std::mem::size_of::<WwSource>(), 48);
     assert_eq!(std::mem::size_of::<WwCache>(), 56);
-    assert_eq!(std::mem::size_of::<WwHost>(), 40);
+    assert_eq!(std::mem::size_of::<WwHost>(), 64);
+    assert_eq!(std::mem::size_of::<WwTool>(), 48);
+    assert_eq!(std::mem::size_of::<WwOption>(), 56);
+    assert_eq!(std::mem::size_of::<WwTools>(), 64);
     assert_eq!(std::mem::size_of::<WwKey>(), 16);
     assert_eq!(std::mem::size_of::<WwInput>(), 88);
     assert_eq!(std::mem::size_of::<WwControl>(), 64);
@@ -334,7 +337,7 @@ fn the_table_of_the_host_reads_files_through_the_cache() {
     // SAFETY: the table of the host is static; its sources are read and freed as ww.h says.
     unsafe {
         let host = &*host();
-        assert_eq!((host.size, host.api_version), (40, 1));
+        assert_eq!((host.size, host.api_version), (64, 1));
         let name = CString::new(path.to_string_lossy().into_owned()).unwrap();
         let mut error = [0 as c_char; 128];
         let source = (host.open_file.unwrap())(name.as_ptr(), error.as_mut_ptr(), 128);
@@ -368,7 +371,50 @@ fn the_table_of_the_host_reads_files_through_the_cache() {
 /// A plugin of the stable interface written with the crate `ww-stable`, as one of Rust of
 /// another toolchain would be.
 mod with_the_crate {
-    use ww_stable::{Control, Cursor, File, Format, Frame, Input, Picture, Plugin, Source, View};
+    use ww_stable::{
+        Control, Cursor, File, Format, Frame, Input, Picture, Plugin, Source, Tool, ToolOption,
+        Tools, View,
+    };
+
+    /// The tools of the plugin: one that gives back what it got, one that asks the host for it.
+    fn run_tool(tool: &str, args: &str, options: &str) -> Result<String, (i32, String)> {
+        match tool {
+            "grey_echo" => Ok(format!(r#"{{"args": {args}, "options": {options}}}"#)),
+            "grey_ask" => ww_stable::call_tool("grey_echo", r#"{"n": 1}"#),
+            _ => Err((ww_stable::TOOL_NOT_FOUND, format!("no tool {tool}"))),
+        }
+    }
+
+    ww_stable::tools!(Tools {
+        name: "Grey tools",
+        tools: &[
+            Tool {
+                name: "grey_echo",
+                description: "Gives back its arguments and options.",
+                schema: r#"{"type": "object"}"#,
+                group: "grey",
+                mode: ww_stable::MODE_READ,
+                needs: "",
+            },
+            Tool {
+                name: "grey_ask",
+                description: "Calls grey_echo through the host.",
+                schema: "",
+                group: "grey",
+                mode: ww_stable::MODE_EDIT,
+                needs: "access=on",
+            },
+        ],
+        options: &[ToolOption {
+            key: "access",
+            title: "Access",
+            values: &["off", "on"],
+            labels: &["Off", "On"],
+            initial: "off",
+            help: "",
+        }],
+        call: run_tool,
+    });
 
     pub struct Grey {
         level: f64,
@@ -572,4 +618,67 @@ fn a_table_of_another_version_is_refused() {
         panic!("a table without its frame");
     };
     assert!(why.contains("without its functions"), "{why}");
+}
+
+#[test]
+fn the_tools_of_a_plugin_of_the_crate_run_and_call_the_host() {
+    use std::collections::BTreeMap;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    use serde_json::json;
+    use wwmcp::{Caller, Config, Info, Need, Server};
+
+    let _one = crate::tools::TESTS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let table = with_the_crate::ww_tools_get(host_for("grey").cast());
+    // SAFETY: the table of the crate has the layout of the header and lives for the run.
+    let tools = unsafe { wrap_tools(&*table.cast::<WwTools>()) }.unwrap();
+    let plugin = Stable::tools_only(tools);
+    assert_eq!(plugin.name(), "Grey tools");
+    assert!(plugin.formats().is_empty());
+    let defs = plugin.tools();
+    assert_eq!(defs[0].name, "grey_echo");
+    assert_eq!(defs[1].mode, Mode::Edit);
+    assert_eq!(defs[1].needs, vec![Need::new("access", "on")]);
+    assert_eq!(defs[1].schema["type"], "object");
+    let options = plugin.tool_options();
+    assert_eq!(
+        (options[0].values.len(), options[0].default.as_str()),
+        (2, "off")
+    );
+    let set = BTreeMap::from([("access".to_owned(), "on".to_owned())]);
+    let call = Call {
+        mode: Mode::Files,
+        options: &set,
+        caller: &Caller::Program,
+    };
+    let echo = plugin
+        .call_tool("grey_echo", &json!({ "a": 1 }), &call)
+        .unwrap();
+    assert_eq!(
+        (echo["args"]["a"].clone(), echo["options"]["access"].clone()),
+        (json!(1), json!("on"))
+    );
+    let missing = plugin
+        .call_tool("grey_none", &json!({}), &call)
+        .unwrap_err();
+    assert_eq!(missing.kind, Kind::NotFound);
+    // A tool of the plugin calls another by its name through the host: as the plugin `grey`.
+    let mut plugins = crate::plugin::Plugins::default();
+    plugins.add(PathBuf::from("grey.dll"), Box::new(plugin));
+    let server =
+        Arc::new(Server::new(Info::default(), Config::default()).with_all(plugins.sources()));
+    crate::tools::install(server.clone());
+    let asked = server
+        .call("grey_ask", &json!({}), &Caller::Program)
+        .unwrap();
+    assert_eq!(asked["args"]["n"], 1);
+    assert!(server.journal().iter().any(|e| e.client == "plugin grey"));
+    // The option is off for a client: the tool that needs it is refused.
+    let refused = server
+        .call("grey_ask", &json!({}), &Caller::Client)
+        .unwrap_err();
+    assert_eq!(refused.kind, Kind::NotAllowed);
 }

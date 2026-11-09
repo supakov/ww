@@ -5,7 +5,7 @@
 //!
 //! A program or a plugin depends on wwrt alone and takes every crate wwrt holds through it
 //! (`wwrt::ww`, `wwrt::egui`, `wwrt::serde`, `wwrt::serde_json`, `wwrt::windows`, `wwrt::image`,
-//! `wwrt::toml_edit`, `wwrt::quick_xml`): a dependency
+//! `wwrt::toml_edit`, `wwrt::quick_xml`, `wwrt::wwmcp`): a dependency
 //! of its own on one of them would be a second copy of that crate, which rustc refuses. A derive
 //! of serde names its crate: `#[serde(crate = "wwrt::serde")]`.
 
@@ -22,6 +22,7 @@ pub use windows;
 pub use ww;
 pub use ww::eframe;
 pub use ww::eframe::egui;
+pub use wwmcp;
 
 /// The folder of the sources of wwrt, for the tests of a program that translates its texts.
 pub const SOURCES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src");
@@ -36,4 +37,5 @@ pub mod plugin;
 pub mod stable;
 #[doc(hidden)]
 pub mod testing;
+pub mod tools;
 pub mod trust;

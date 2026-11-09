@@ -6,7 +6,8 @@ a window with document tabs, a menu, a command bar, a navigation row, a message 
 settings, themes with an editor, translations, drafts of unsaved changes, the tabs of the last
 session and pages it carries inside itself. A program with plugins adds the runtime `wwrt.dll` and
 a folder `plugins`: native plugins in Rust that draw with the egui of the window, and plugins of a
-stable C interface in any language.
+stable C interface in any language. A program and its plugins serve tools to AI agents over MCP
+and call them by their names (`wwmcp`).
 
 The demo, `examples/ww-demo`, shows every part once.
 
@@ -16,13 +17,14 @@ The demo, `examples/ww-demo`, shows every part once.
 |---|---|
 | `crates/ww-base` | strict JSON files with the trait `Document`, paths inside the program folder, the clock |
 | `crates/ww` | the window: the shell and its trait `App`, the style and the themes, the translations, the painted tree and list, the Markdown viewer, a text editor, embedded files, the settings and the session, the browser edition (wasm32) |
-| `crates/wwrt` | the runtime of the programs with plugins, a Rust dylib: W# and egui re-exported, the native interface of the plugins, the cache of the blocks of files, the type of some bytes, the trust of a plugin, the stable interface as a plugin, the parts of a host of plugins |
+| `crates/wwrt` | the runtime of the programs with plugins, a Rust dylib: W# and egui re-exported, the native interface of the plugins, the cache of the blocks of files, the type of some bytes, the trust of a plugin, the stable interface as a plugin, the tools of the plugins, the parts of a host of plugins |
+| `crates/wwmcp` | the MCP server: the tools of a program and of its plugins, their switches and options in a `.wwmcp` file, the journal and the log, stdio and loopback HTTP, the command line, the tools of the window, and (feature `ui`) its tab |
 | `stable/` | `ww.h`, the stable interface for plugins of any language with a C FFI, and `rust/`, the crate `ww-stable` for such a plugin in Rust of any toolchain |
 | `examples/ww-demo` | the demo: a program on W# and a host of plugins, every part once |
 | `examples/ww-hello` | the template of a native plugin |
 | `examples/ww-mandelbrot` | a plugin of the stable interface in C: the Mandelbrot set |
 | `examples/ww-grey` | a plugin of the stable interface in Rust with `ww-stable`: any bytes as a picture |
-| `docs/` | `ww.md` (programs), `plugins.md` (native plugins and hosts), `stable.md` (the stable interface and other languages), `embedded.md` (embedded files), `design.md` (why the plugins are built this way), `details.md` (facts for contributors), `releases/` |
+| `docs/` | `ww.md` (programs), `plugins.md` (native plugins and hosts), `stable.md` (the stable interface and other languages), `mcp.md` (the MCP server and the tools), `embedded.md` (embedded files), `design.md` (why the plugins are built this way), `details.md` (facts for contributors), `releases/` |
 | `tools/` | `imports.py`: the DLLs an executable imports, for packing a program with plugins |
 
 ## Build and run the demo
@@ -69,6 +71,8 @@ repository) and ships `std-<hash>.dll` next to `wwrt.dll` (docs/plugins.md, sect
 - **Stable, in any language** (docs/stable.md): include `stable/ww.h`, export `ww_plugin_get`,
   build a DLL once; in Rust of any toolchain the crate `stable/rust` (`ww-stable`) writes the
   table.
+- **Tools** (docs/mcp.md): either kind may add tools for AI agents and for a call by name
+  (`Plugin::tools`, or `ww_tools_get` of `ww.h`), and call the tools of its program by name.
 
 The interface of both kinds is version 1 and stays 1 until the first release of W#: until then
 it may change.

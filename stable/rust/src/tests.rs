@@ -14,7 +14,10 @@ fn the_structures_have_the_layout_of_the_header() {
     assert_eq!(size_of::<ffi::WwFile>(), 24);
     assert_eq!(size_of::<ffi::WwSource>(), 48);
     assert_eq!(size_of::<ffi::WwCache>(), 56);
-    assert_eq!(size_of::<ffi::WwHost>(), 40);
+    assert_eq!(size_of::<ffi::WwHost>(), 64);
+    assert_eq!(size_of::<ffi::WwTool>(), 48);
+    assert_eq!(size_of::<ffi::WwOption>(), 56);
+    assert_eq!(size_of::<ffi::WwTools>(), 64);
     assert_eq!(size_of::<ffi::WwKey>(), 16);
     assert_eq!(size_of::<ffi::WwInput>(), 88);
     assert_eq!(size_of::<ffi::WwControl>(), 64);
@@ -211,7 +214,38 @@ static HOST_OF_TESTS: HostTable = HostTable(ffi::WwHost {
     slice: Some(fake_slice),
     close_source: Some(fake_close_source),
     cache: Some(cache_state),
+    this: std::ptr::null_mut(),
+    call_tool: Some(fake_call_tool),
+    free_text: Some(fake_free_text),
 });
+
+/// A host whose one tool, `twice`, gives its argument `n` twice; any other is not found.
+unsafe extern "C" fn fake_call_tool(
+    _this: *mut c_void,
+    name: *const c_char,
+    args: *const c_char,
+    answer: *mut *mut c_char,
+) -> i32 {
+    // SAFETY: the crate gives texts that end with a zero and where the answer goes.
+    let (name, args) = unsafe { (text_of(name), text_of(args)) };
+    let (code, text) = if name == "twice" {
+        let n: i64 = args
+            .trim_matches(|c: char| !c.is_ascii_digit())
+            .parse()
+            .unwrap_or(0);
+        (0, (2 * n).to_string())
+    } else {
+        (TOOL_NOT_FOUND, format!("no tool {name}"))
+    };
+    // SAFETY: as above.
+    unsafe { *answer = c_text(&text).into_raw() };
+    code
+}
+
+unsafe extern "C" fn fake_free_text(text: *mut c_char) {
+    // SAFETY: a text of `fake_call_tool`, freed once.
+    drop(unsafe { CString::from_raw(text) });
+}
 
 fn table() -> &'static ffi::WwPlugin {
     // SAFETY: the table lives for the whole run, the host of the tests too.
@@ -495,4 +529,82 @@ fn a_picture_shorter_than_its_size_is_none() {
     };
     assert!(rows.whole(), "the last row needs no stride after it");
     assert!(!Picture::new(0, 2, &[]).whole());
+}
+
+/// The table of the tools the crate writes: the texts, the options with their values, the call
+/// with its answer and its error, and a call of a tool of the host by its name.
+#[test]
+fn the_table_of_the_tools_is_the_one_of_the_header() {
+    fn run(tool: &str, args: &str, _options: &str) -> Result<String, (i32, String)> {
+        match tool {
+            "echo" => Ok(args.to_owned()),
+            "host" => call_tool("twice", r#"{"n": 21}"#),
+            "boom" => panic!("broken"),
+            _ => Err((TOOL_NOT_FOUND, format!("no tool {tool}"))),
+        }
+    }
+    static TOOLS: Tools = Tools {
+        name: "Tests",
+        tools: &[Tool {
+            name: "echo",
+            description: "Echoes.",
+            schema: r#"{"type": "object"}"#,
+            group: "words",
+            mode: MODE_EDIT,
+            needs: "access=on",
+        }],
+        options: &[ToolOption {
+            key: "access",
+            title: "Access",
+            values: &["off", "on"],
+            labels: &["Off", "On"],
+            initial: "off",
+            help: "",
+        }],
+        call: run,
+    };
+    unsafe extern "C" fn call(
+        tool: *const c_char,
+        args: *const c_char,
+        options: *const c_char,
+        answer: *mut *mut c_char,
+    ) -> i32 {
+        // SAFETY: the test gives texts that end with a zero and where the answer goes.
+        unsafe { glue::call_tool(tool, args, options, answer, TOOLS.call) }
+    }
+    // SAFETY: the host of the tests lives for the run.
+    unsafe { glue::set_host(&HOST_OF_TESTS.0) };
+    let table = ToolsTable::new(&TOOLS, call);
+    // SAFETY: the table and its texts live as long as `table`.
+    unsafe {
+        let t = &*table.tools();
+        assert_eq!(
+            (t.api_version, t.size as usize),
+            (1, size_of::<ffi::WwTools>())
+        );
+        assert_eq!(text_of(t.name), "Tests");
+        assert_eq!(t.tool_count, 1);
+        let tool = &*t.tools;
+        assert_eq!(text_of(tool.needs), "access=on");
+        assert_eq!(tool.mode, MODE_EDIT);
+        let option = &*t.options;
+        assert_eq!(option.value_count, 2);
+        assert_eq!(text_of(*option.labels.add(1)), "On");
+        let run = |name: &str, args: &str| {
+            let (name, args, options) = (c_text(name), c_text(args), c_text("{}"));
+            let mut answer: *mut c_char = std::ptr::null_mut();
+            let code =
+                (t.call.unwrap())(name.as_ptr(), args.as_ptr(), options.as_ptr(), &mut answer);
+            let text = text_of(answer);
+            (t.free_answer.unwrap())(answer);
+            (code, text)
+        };
+        assert_eq!(run("echo", r#"{"a": 1}"#), (0, r#"{"a": 1}"#.to_owned()));
+        assert_eq!(run("host", ""), (0, "42".to_owned()));
+        assert_eq!(run("none", "").0, TOOL_NOT_FOUND);
+        let (code, why) = run("boom", "");
+        assert_eq!(code, TOOL_FAILED);
+        assert!(why.contains("broken"), "{why}");
+    }
+    assert_eq!(call_tool("other", "{}").unwrap_err().0, TOOL_NOT_FOUND);
 }

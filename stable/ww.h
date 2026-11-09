@@ -1,18 +1,22 @@
 /* ww.h: the stable interface of the plugins of W#, version 1 (docs/stable.md).
  *
- * A plugin in any language with a C FFI is a DLL that exports one function, ww_plugin_get, which
- * takes the table of the host and gives the table of the plugin. The plugin names its formats
+ * A plugin in any language with a C FFI is a DLL that exports ww_plugin_get, which takes the
+ * table of the host and gives the table of the plugin, or ww_tools_get, or both. The plugin names its formats
  * (their extensions and MIME types), may find its types in the first bytes of a file (sniff) and
  * embed files of its own (a guide, samples, translations); a view of a file or of some bytes
  * draws a picture of RGBA pixels and names the controls of its bar. The host draws them, gives the
  * view the keys and the mouse of its area, and calls back when a control changes. A view of some
  * bytes reads them through a source, a part of a file the host reads in blocks through its cache,
- * the same cache the plugin may read any file through (ww_host). A plugin of this interface
- * outlives the releases of the host: it is built once.
+ * the same cache the plugin may read any file through (ww_host). A plugin may also have tools
+ * (ww_tools_get, a second function, with or without ww_plugin_get): the program serves them to AI
+ * agents over MCP and calls them by name, and the plugin calls any tool of the program by its
+ * name (call_tool of ww_host). A plugin of this interface outlives the releases of the host: it
+ * is built once.
  *
  * The rules:
  * - Every call comes from the thread of the window, but the functions of ww_host and the read of
- *   a source, which any thread of the plugin may call; a plugin may run threads of its own.
+ *   a source, which any thread of the plugin may call, and the call of a tool, which any thread
+ *   of the host makes, several at once; a plugin may run threads of its own.
  * - Every text is UTF-8 and ends with a zero.
  * - What the host gives for a call (an input, a name) lives for the call; a source given to
  *   open_bytes lives until close of its view; a source of open_file or slice until close_source;
@@ -64,6 +68,21 @@ extern "C" {
 #define WW_CURSOR_ZOOM_IN 5u
 #define WW_CURSOR_ZOOM_OUT 6u
 #define WW_CURSOR_MOVE 7u
+
+/* What a call of a tool gives: WW_TOOL_OK, or the kind of its error. */
+#define WW_TOOL_OK 0
+#define WW_TOOL_INVALID 1       /* the arguments are wrong */
+#define WW_TOOL_NOT_FOUND 2
+#define WW_TOOL_NOT_ALLOWED 3   /* the mode or an option of the server forbids it */
+#define WW_TOOL_READ_FAILED 4
+#define WW_TOOL_WRITE_FAILED 5
+#define WW_TOOL_FAILED 6
+
+/* The mode of the server a tool needs: read changes nothing, edit changes what the program holds
+ * in memory, files writes files too. */
+#define WW_MODE_READ 0u
+#define WW_MODE_EDIT 1u
+#define WW_MODE_FILES 2u
 
 /* The kinds of a control. */
 #define WW_BUTTON 0u
@@ -128,6 +147,14 @@ typedef struct ww_host {
     void (*close_source)(const ww_source *source);
     /* Writes the state of the cache, the fields its size covers. */
     void (*cache)(ww_cache *out);
+    /* The host's own, given back to call_tool: it names the plugin the table was given to. */
+    void *self;
+    /* Calls a tool of the program by its name, as the plugin: the switches, the mode and the
+     * options of the server apply. args is a JSON object (NULL for none); the answer (a JSON
+     * value, or the message of the error) is written into *answer and freed with free_text.
+     * Gives WW_TOOL_OK or the kind of the error. */
+    int32_t (*call_tool)(void *self, const char *name, const char *args, char **answer);
+    void (*free_text)(char *text);
 } ww_host;
 
 typedef struct ww_key {
@@ -203,14 +230,57 @@ typedef struct ww_plugin {
     void (*close)(void *view);
 } ww_plugin;
 
+/* A tool of a plugin. */
+typedef struct ww_tool {
+    const char *name;               /* letters, digits, "_", "-" and ".", unique in the program */
+    const char *description;        /* for the agent: what it does and what it gives */
+    const char *schema;             /* the JSON schema of its arguments, an object */
+    const char *group;              /* the tools a switch of the tab turns off together */
+    uint32_t mode;                  /* WW_MODE_* it needs */
+    const char *needs;              /* the options it needs, "key=value,key=value", or NULL */
+} ww_tool;
+
+/* An option of the tools of a plugin: an access setting a tool needs, or a value a tool reads,
+ * kept in the branch of the plugin of the configuration file of the server. */
+typedef struct ww_option {
+    const char *key;
+    const char *title;              /* the name shown (English, translated by the plugin's files) */
+    const char *const *values;      /* the values, the weakest first; NULL with 0: a text */
+    const char *const *labels;      /* the names shown of the values, or NULL */
+    uint32_t value_count;
+    const char *initial;            /* the value without a setting */
+    const char *help;               /* a line under it, or NULL */
+} ww_option;
+
+/* The tools of a plugin: its table, given by ww_tools_get. */
+typedef struct ww_tools {
+    uint32_t api_version;           /* WW_API_VERSION */
+    uint32_t size;                  /* sizeof(ww_tools) of the plugin */
+    const char *name;               /* the name of the source of the tools */
+    const ww_tool *tools;
+    uint32_t tool_count;
+    const ww_option *options;
+    uint32_t option_count;
+    /* Runs a tool after the host checked the switches, the mode and the options: its arguments
+     * and the values of the options of the plugin as JSON objects. Writes the answer (a JSON
+     * value, or the message of the error) into *answer, which the host frees with free_answer;
+     * gives WW_TOOL_OK or the kind of the error. */
+    int32_t (*call)(const char *tool, const char *args, const char *options, char **answer);
+    void (*free_answer)(char *answer);
+} ww_tools;
+
 #ifdef _WIN32
 #define WW_EXPORT __declspec(dllexport)
 #else
 #define WW_EXPORT __attribute__((visibility("default")))
 #endif
 
-/* The one function of a plugin: the host gives its table, which lives for the run. */
+/* The views of a plugin: the host gives its table, which lives for the run. */
 WW_EXPORT const ww_plugin *ww_plugin_get(const ww_host *host);
+
+/* The tools of a plugin, a function of its own: a DLL may export it alone (tools without a
+ * view), ww_plugin_get alone, or both. The host gives its table, which lives for the run. */
+WW_EXPORT const ww_tools *ww_tools_get(const ww_host *host);
 
 #ifdef __cplusplus
 }
