@@ -1,6 +1,6 @@
 [package]
-name = "wv-hello"
-description = "The template of a native plugin of wview: the SDK copies it for a plugin of one's own"
+name = "ww-hello"
+description = "The template of a native plugin of a program on W#: a plugin of one's own starts as a copy of it"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,7 +8,8 @@ license.workspace = true
 publish.workspace = true
 
 [lib]
-crate-type = ["cdylib"]
+# The DLL of the plugin, and the library the tests of a program take it from without a DLL.
+crate-type = ["cdylib", "rlib"]
 
 [features]
 # The plugin as a library without the exports of a DLL, for the tests of a program
@@ -16,6 +17,6 @@ crate-type = ["cdylib"]
 library = []
 
 [dependencies]
-# wwrt alone: every crate the plugin shares with wview comes through it (wwrt::egui, wwrt::ww,
+# wwrt alone: every crate the plugin shares with its host comes through it (wwrt::egui, wwrt::ww,
 # wwrt::serde); a dependency of its own on one of them would not load.
 wwrt = { path = "../../crates/wwrt" }

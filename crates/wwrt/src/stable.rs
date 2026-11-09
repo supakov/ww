@@ -1,14 +1,17 @@
-//! The stable interface of the plugins (`stable/wview.h`, version 1, docs/plugins.md 6.9):
-//! a DLL of any language with a C FFI that exports `wv_plugin_get`. The structures here are the
-//! ones of the header; `wrap` makes of such a table an ordinary `Plugin`, whose views draw the
-//! picture of the plugin as a texture, its controls as widgets of egui over the view, and give it
-//! the keys and the mouse of the view.
+//! The stable interface of the plugins (`stable/ww.h`, version 1, docs/stable.md): a DLL of any
+//! language with a C FFI that exports `ww_plugin_get`. The structures here are the ones of the
+//! header; `wrap` makes of such a table an ordinary `Plugin`, whose views draw the picture of the
+//! plugin as a texture, its controls as widgets of egui over the view, and give it the keys and
+//! the mouse of the view. The table of the host (`host`) lends every such plugin the cache of the
+//! blocks of the program: a file read in blocks, a part of one, the state of the cache.
 
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::path::Path;
 
-use crate::egui::{self, Key, Pos2, Rect, Vec2};
+use ww::embedded::{self, Embedded};
 
+use crate::blocks::{self, BlockFile};
+use crate::egui::{self, Key, Pos2, Rect, Vec2};
 use crate::input::{self, Cursor};
 use crate::plugin::{Format, Host, Plugin, View};
 
@@ -35,22 +38,68 @@ pub const SLIDER: u32 = 2;
 pub const CHOICE: u32 = 3;
 pub const LABEL: u32 = 4;
 
+/// The most formats, extensions, types and files of a table the host reads.
+const MOST: u32 = 64;
+const MOST_FILES: u32 = 4096;
+
 #[repr(C)]
-pub struct WvFormat {
+pub struct WwFormat {
     pub name: *const c_char,
     pub extensions: *const *const c_char,
     pub extension_count: u32,
+    pub mimes: *const *const c_char,
+    pub mime_count: u32,
 }
 
 #[repr(C)]
-pub struct WvKey {
+pub struct WwFile {
+    pub path: *const c_char,
+    pub bytes: *const u8,
+    pub size: u64,
+}
+
+#[repr(C)]
+pub struct WwSource {
+    pub size: u32,
+    pub length: u64,
+    pub self_: *mut c_void,
+    pub read: Option<unsafe extern "C" fn(*mut c_void, u64, *mut u8, u32) -> u32>,
+    pub path: *const c_char,
+    pub offset: u64,
+}
+
+#[repr(C)]
+#[derive(Default)]
+pub struct WwCache {
+    pub size: u32,
+    pub block: u32,
+    pub budget: u64,
+    pub used: u64,
+    pub blocks: u64,
+    pub files: u64,
+    pub reads: u64,
+    pub hits: u64,
+}
+
+#[repr(C)]
+pub struct WwHost {
+    pub size: u32,
+    pub api_version: u32,
+    pub open_file: Option<unsafe extern "C" fn(*const c_char, *mut c_char, u32) -> *const WwSource>,
+    pub slice: Option<unsafe extern "C" fn(*const WwSource, u64, u64) -> *const WwSource>,
+    pub close_source: Option<unsafe extern "C" fn(*const WwSource)>,
+    pub cache: Option<unsafe extern "C" fn(*mut WwCache)>,
+}
+
+#[repr(C)]
+pub struct WwKey {
     pub name: *const c_char,
     pub pressed: u32,
     pub modifiers: u32,
 }
 
 #[repr(C)]
-pub struct WvInput {
+pub struct WwInput {
     pub size: u32,
     pub width: u32,
     pub height: u32,
@@ -67,13 +116,13 @@ pub struct WvInput {
     pub wheel_x: f32,
     pub wheel_y: f32,
     pub modifiers: u32,
-    pub keys: *const WvKey,
+    pub keys: *const WwKey,
     pub key_count: u32,
     pub text: *const c_char,
 }
 
 #[repr(C)]
-pub struct WvControl {
+pub struct WwControl {
     pub id: u32,
     pub kind: u32,
     pub label: *const c_char,
@@ -86,14 +135,14 @@ pub struct WvControl {
 }
 
 #[repr(C)]
-pub struct WvOutput {
+pub struct WwOutput {
     pub size: u32,
     pub width: u32,
     pub height: u32,
     pub stride: u32,
     pub pixels: *const u8,
     pub changed: u32,
-    pub controls: *const WvControl,
+    pub controls: *const WwControl,
     pub control_count: u32,
     pub keys: u32,
     pub cursor: u32,
@@ -101,19 +150,37 @@ pub struct WvOutput {
     pub status: *const c_char,
 }
 
+/// The function that opens a file.
+pub type OpenFn = unsafe extern "C" fn(*const c_char, *mut c_char, u32) -> *mut c_void;
+/// The function that opens some bytes of a source under a name and a type.
+pub type OpenBytesFn = unsafe extern "C" fn(
+    *const WwSource,
+    *const c_char,
+    *const c_char,
+    *mut c_char,
+    u32,
+) -> *mut c_void;
+/// The function that finds a type in the first bytes.
+pub type SniffFn = unsafe extern "C" fn(*const u8, u32) -> *const c_char;
+
 #[repr(C)]
-pub struct WvPlugin {
+pub struct WwPlugin {
     pub api_version: u32,
+    pub size: u32,
     pub name: *const c_char,
-    pub formats: *const WvFormat,
+    pub formats: *const WwFormat,
     pub format_count: u32,
-    pub open: Option<unsafe extern "C" fn(*const c_char, *mut c_char, u32) -> *mut c_void>,
-    pub frame: Option<unsafe extern "C" fn(*mut c_void, *const WvInput, *mut WvOutput)>,
+    pub files: *const WwFile,
+    pub file_count: u32,
+    pub open: Option<OpenFn>,
+    pub open_bytes: Option<OpenBytesFn>,
+    pub sniff: Option<SniffFn>,
+    pub frame: Option<unsafe extern "C" fn(*mut c_void, *const WwInput, *mut WwOutput)>,
     pub control: Option<unsafe extern "C" fn(*mut c_void, u32, f64)>,
     pub close: Option<unsafe extern "C" fn(*mut c_void)>,
 }
 
-/// The keys of egui a view takes by the groups of `WV_KEYS_*`, with their names of W3C.
+/// The keys of egui a view takes by the groups of `WW_KEYS_*`, with their names of W3C.
 const KEYS: [(Key, &CStr, u32); 52] = [
     (Key::ArrowLeft, c"ArrowLeft", KEYS_ARROWS),
     (Key::ArrowRight, c"ArrowRight", KEYS_ARROWS),
@@ -210,49 +277,296 @@ unsafe fn text(text: *const c_char) -> String {
         .into_owned()
 }
 
+/// A text of the plugin kept for the run.
+///
+/// # Safety
+/// As for `text`.
+unsafe fn leaked(t: *const c_char) -> &'static str {
+    // SAFETY: by the contract of the caller.
+    Box::leak(unsafe { text(t) }.into_boxed_str())
+}
+
+/// The texts of an array of the plugin, at most `MOST`, each kept for the run.
+///
+/// # Safety
+/// `list` is null or holds `count` texts that end with a zero.
+unsafe fn leaked_list(list: *const *const c_char, count: u32) -> &'static [&'static str] {
+    if list.is_null() {
+        return &[];
+    }
+    // SAFETY: by the contract of the caller.
+    let texts: Vec<&'static str> = (0..count.min(MOST) as usize)
+        .map(|i| unsafe { leaked(*list.add(i)) })
+        .collect();
+    Box::leak(texts.into_boxed_slice())
+}
+
+/// The reason a plugin wrote into the buffer of the host, or `fallback`.
+fn reason(error: &mut [c_char], fallback: &str) -> String {
+    if let Some(last) = error.last_mut() {
+        *last = 0;
+    }
+    // SAFETY: the buffer ends with a zero.
+    let why = unsafe { text(error.as_ptr()) };
+    if why.is_empty() {
+        fallback.to_owned()
+    } else {
+        why
+    }
+}
+
+/// Writes a reason into a buffer of the plugin, cut at a character, with its zero.
+///
+/// # Safety
+/// `error` is null or a buffer of `size` bytes.
+unsafe fn write_error(error: *mut c_char, size: u32, why: &str) {
+    if error.is_null() || size == 0 {
+        return;
+    }
+    let mut n = why.len().min(size as usize - 1);
+    while !why.is_char_boundary(n) {
+        n -= 1;
+    }
+    // SAFETY: n + 1 bytes fit the buffer.
+    unsafe {
+        std::ptr::copy_nonoverlapping(why.as_ptr().cast::<c_char>(), error, n);
+        *error.add(n) = 0;
+    }
+}
+
+/// A source of the host: the structure of the header first, then the bytes it reads. A source
+/// of `open_bytes` belongs to its view (`owned`), the plugin frees the others.
+#[repr(C)]
+struct SourceBox {
+    raw: WwSource,
+    file: BlockFile,
+    path: Option<CString>,
+    owned: bool,
+}
+
+impl SourceBox {
+    /// A source of some bytes, its pointer for the plugin.
+    fn make(file: BlockFile, owned: bool) -> *mut SourceBox {
+        let path = file
+            .path()
+            .and_then(|p| CString::new(p.to_string_lossy().into_owned()).ok());
+        let boxed = Box::into_raw(Box::new(SourceBox {
+            raw: WwSource {
+                size: std::mem::size_of::<WwSource>() as u32,
+                length: file.len(),
+                self_: std::ptr::null_mut(),
+                read: Some(source_read),
+                path: path.as_ref().map_or(std::ptr::null(), |p| p.as_ptr()),
+                offset: file.offset(),
+            },
+            file,
+            path,
+            owned,
+        }));
+        // SAFETY: the box was just made; its address is its `self`.
+        unsafe { (*boxed).raw.self_ = boxed.cast() };
+        boxed
+    }
+}
+
+unsafe extern "C" fn source_read(this: *mut c_void, offset: u64, out: *mut u8, count: u32) -> u32 {
+    if this.is_null() || out.is_null() {
+        return 0;
+    }
+    // SAFETY: `self` of a source is its box, alive while the plugin may read it; `out` is a
+    // buffer of `count` bytes of the plugin.
+    unsafe {
+        let source = &*this.cast::<SourceBox>();
+        let out = std::slice::from_raw_parts_mut(out, count as usize);
+        source.file.read_at(offset, out).unwrap_or(0) as u32
+    }
+}
+
+unsafe extern "C" fn host_open_file(
+    path: *const c_char,
+    error: *mut c_char,
+    size: u32,
+) -> *const WwSource {
+    // SAFETY: the plugin gives a path that ends with a zero.
+    let path = unsafe { text(path) };
+    match BlockFile::open(Path::new(&path)) {
+        Ok(file) => SourceBox::make(file, false).cast_const().cast(),
+        Err(e) => {
+            // SAFETY: the plugin gives a buffer of `size` bytes.
+            unsafe { write_error(error, size, &format!("{path}: {e}")) };
+            std::ptr::null()
+        }
+    }
+}
+
+unsafe extern "C" fn host_slice(
+    source: *const WwSource,
+    offset: u64,
+    length: u64,
+) -> *const WwSource {
+    if source.is_null() {
+        return std::ptr::null();
+    }
+    // SAFETY: a source of this host is the first field of its box.
+    let source = unsafe { &*source.cast::<SourceBox>() };
+    SourceBox::make(source.file.slice(offset, length), false)
+        .cast_const()
+        .cast()
+}
+
+unsafe extern "C" fn host_close_source(source: *const WwSource) {
+    if source.is_null() {
+        return;
+    }
+    let boxed = source.cast::<SourceBox>().cast_mut();
+    // SAFETY: a source of this host is the first field of its box; the ones of open_file and
+    // slice are freed once, by the plugin, and the ones of its views by the host alone.
+    unsafe {
+        if !(*boxed).owned {
+            drop(Box::from_raw(boxed));
+        }
+    }
+}
+
+unsafe extern "C" fn host_cache(out: *mut WwCache) {
+    if out.is_null() {
+        return;
+    }
+    let state = blocks::cache().state();
+    let written = WwCache {
+        size: 0,
+        block: state.limits.block as u32,
+        budget: state.limits.budget as u64,
+        used: state.used as u64,
+        blocks: state.blocks as u64,
+        files: state.files as u64,
+        reads: state.reads,
+        hits: state.hits,
+    };
+    // SAFETY: the plugin gives a structure of `size` bytes; the ones it covers are written.
+    unsafe {
+        let n = ((*out).size as usize).min(std::mem::size_of::<WwCache>());
+        let size = (*out).size;
+        std::ptr::copy_nonoverlapping((&raw const written).cast::<u8>(), out.cast::<u8>(), n);
+        if n >= 4 {
+            (*out).size = size;
+        }
+    }
+}
+
+/// The table of the host every plugin of the stable interface gets.
+struct HostTable(WwHost);
+// SAFETY: the table holds functions alone.
+unsafe impl Sync for HostTable {}
+
+static HOST: HostTable = HostTable(WwHost {
+    size: std::mem::size_of::<WwHost>() as u32,
+    api_version: API,
+    open_file: Some(host_open_file),
+    slice: Some(host_slice),
+    close_source: Some(host_close_source),
+    cache: Some(host_cache),
+});
+
+/// The table of the host, for `ww_plugin_get`.
+pub fn host() -> *const WwHost {
+    &HOST.0
+}
+
 /// A plugin of the stable interface as a plugin of wwrt.
 pub struct Stable {
-    table: &'static WvPlugin,
+    table: &'static WwPlugin,
     name: &'static str,
     formats: &'static [Format],
+    files: Embedded,
+}
+
+/// The table of a plugin, the fields its size covers, the others zero.
+///
+/// # Safety
+/// `table` is the table of a plugin as `wrap` takes it.
+unsafe fn covered(table: &'static WwPlugin) -> &'static WwPlugin {
+    // SAFETY: a table of integers, pointers and functions is valid when zero, and the bytes copied
+    // are the ones its size covers.
+    unsafe {
+        let mut own: WwPlugin = std::mem::zeroed();
+        let n = (table.size as usize).min(std::mem::size_of::<WwPlugin>());
+        std::ptr::copy_nonoverlapping(
+            (table as *const WwPlugin).cast::<u8>(),
+            (&raw mut own).cast::<u8>(),
+            n,
+        );
+        Box::leak(Box::new(own))
+    }
 }
 
 /// The plugin of a table of the stable interface, after a check of its version and its functions.
 ///
 /// # Safety
 /// `table` is the table of a plugin that lives as long as the process (a DLL never unloaded), with
-/// its texts and formats as the header describes them.
-pub unsafe fn wrap(table: &'static WvPlugin) -> Result<Stable, String> {
+/// its texts, formats and files as the header describes them.
+pub unsafe fn wrap(table: &'static WwPlugin) -> Result<Stable, String> {
     if table.api_version != API {
         return Err(format!(
-            "of the stable interface {}; this wview knows {API}",
+            "of the stable interface {}; this host knows {API}",
             table.api_version
         ));
     }
+    if (table.size as usize) < std::mem::offset_of!(WwPlugin, files) {
+        return Err(format!(
+            "a table of the stable interface of {} bytes",
+            table.size
+        ));
+    }
+    // SAFETY: by the contract of the caller.
+    let table = unsafe { covered(table) };
     if table.open.is_none() || table.frame.is_none() || table.close.is_none() {
         return Err("a table of the stable interface without its functions".to_owned());
     }
     // SAFETY: by the contract of the caller, the texts and the arrays are as the header says.
     unsafe {
-        let name: &'static str = Box::leak(text(table.name).into_boxed_str());
+        let name = leaked(table.name);
         let mut formats = Vec::new();
-        for i in 0..table.format_count.min(64) as usize {
-            let f = &*table.formats.add(i);
-            let mut extensions = Vec::new();
-            for j in 0..f.extension_count.min(64) as usize {
-                let e = text(*f.extensions.add(j)).to_lowercase();
-                extensions.push(&*Box::leak(e.into_boxed_str()));
+        if !table.formats.is_null() {
+            for i in 0..table.format_count.min(MOST) as usize {
+                let f = &*table.formats.add(i);
+                let extensions: Vec<&'static str> = leaked_list(f.extensions, f.extension_count)
+                    .iter()
+                    .map(|e| &*Box::leak(e.to_lowercase().into_boxed_str()))
+                    .collect();
+                formats.push(Format {
+                    name: leaked(f.name),
+                    extensions: Box::leak(extensions.into_boxed_slice()),
+                    mimes: leaked_list(f.mimes, f.mime_count),
+                });
             }
-            formats.push(Format {
-                name: Box::leak(text(f.name).into_boxed_str()),
-                extensions: Box::leak(extensions.into_boxed_slice()),
-                mimes: &[],
-            });
+        }
+        let mut files = Vec::new();
+        if !table.files.is_null() {
+            for i in 0..table.file_count.min(MOST_FILES) as usize {
+                let f = &*table.files.add(i);
+                if f.bytes.is_null() && f.size > 0 {
+                    continue;
+                }
+                let bytes: &'static [u8] = if f.size == 0 {
+                    &[]
+                } else {
+                    std::slice::from_raw_parts(f.bytes, f.size as usize)
+                };
+                let Some(path) = embedded::normal(&text(f.path)) else {
+                    continue;
+                };
+                files.push(embedded::File {
+                    path: Box::leak(path.into_boxed_str()),
+                    bytes,
+                });
+            }
         }
         Ok(Stable {
             table,
             name,
             formats: Box::leak(formats.into_boxed_slice()),
+            files: Embedded::new(Box::leak(files.into_boxed_slice())),
         })
     }
 }
@@ -263,6 +577,36 @@ unsafe impl Send for Stable {}
 // SAFETY: as for Send.
 unsafe impl Sync for Stable {}
 
+impl Stable {
+    /// A view of a pointer the plugin gave, or the reason in its buffer.
+    fn view(
+        &self,
+        view: *mut c_void,
+        error: &mut [c_char],
+        source: Option<*mut SourceBox>,
+    ) -> Result<Box<dyn View>, String> {
+        if view.is_null() {
+            if let Some(source) = source {
+                // SAFETY: the box of a source of the host that no view took.
+                drop(unsafe { Box::from_raw(source) });
+            }
+            return Err(reason(error, "the plugin did not open it"));
+        }
+        Ok(Box::new(StableView {
+            table: self.table,
+            view,
+            source,
+            texture: None,
+            size: [0, 0],
+            controls: Vec::new(),
+            keys: 0,
+            cursor: 0,
+            status: String::new(),
+            changes: Vec::new(),
+        }))
+    }
+}
+
 impl Plugin for Stable {
     fn name(&self) -> &'static str {
         self.name
@@ -272,33 +616,65 @@ impl Plugin for Stable {
         self.formats
     }
 
+    fn files(&self) -> Embedded {
+        self.files
+    }
+
     fn open(&self, path: &Path, _settings: &serde_json::Value) -> Result<Box<dyn View>, String> {
         let path = CString::new(path.to_string_lossy().into_owned()).map_err(|e| e.to_string())?;
         let mut error = vec![0 as c_char; 1024];
         let open = self.table.open.ok_or("no open")?;
         // SAFETY: the plugin reads the path for the call and writes at most `error.len()` bytes.
         let view = unsafe { open(path.as_ptr(), error.as_mut_ptr(), error.len() as u32) };
-        if view.is_null() {
-            error[1023] = 0;
-            // SAFETY: the buffer ends with a zero.
-            let why = unsafe { text(error.as_ptr()) };
-            return Err(if why.is_empty() {
-                "the plugin did not open the file".to_owned()
-            } else {
-                why
-            });
+        self.view(view, &mut error, None)
+    }
+
+    fn opens_bytes(&self) -> bool {
+        self.table.open_bytes.is_some()
+    }
+
+    fn open_bytes(
+        &self,
+        name: &str,
+        mime: &str,
+        bytes: BlockFile,
+        _settings: &serde_json::Value,
+    ) -> Result<Box<dyn View>, String> {
+        let Some(open) = self.table.open_bytes else {
+            return Err(crate::plugin::NO_BYTES.to_owned());
+        };
+        let name = CString::new(name.replace('\0', "")).unwrap_or_default();
+        let mime = CString::new(mime.replace('\0', "")).unwrap_or_default();
+        let source = SourceBox::make(bytes, true);
+        let mut error = vec![0 as c_char; 1024];
+        // SAFETY: the source lives until the view closes (or is freed at once when there is none),
+        // the texts for the call; the plugin writes at most `error.len()` bytes.
+        let view = unsafe {
+            open(
+                source.cast_const().cast(),
+                name.as_ptr(),
+                mime.as_ptr(),
+                error.as_mut_ptr(),
+                error.len() as u32,
+            )
+        };
+        self.view(view, &mut error, Some(source))
+    }
+
+    fn sniff(&self, head: &[u8]) -> Option<&'static str> {
+        let sniff = self.table.sniff?;
+        let n = head.len().min(crate::mime::SNIFFED);
+        // SAFETY: the bytes live for the call; the plugin gives a text of its own or null.
+        let found = unsafe { text(sniff(head.as_ptr(), n as u32)) };
+        if found.is_empty() {
+            return None;
         }
-        Ok(Box::new(StableView {
-            table: self.table,
-            view,
-            texture: None,
-            size: [0, 0],
-            controls: Vec::new(),
-            keys: 0,
-            cursor: 0,
-            status: String::new(),
-            changes: Vec::new(),
-        }))
+        // The type is one of the formats of the plugin: the text kept for the run.
+        self.formats
+            .iter()
+            .flat_map(|f| f.mimes.iter())
+            .find(|m| m.eq_ignore_ascii_case(&found))
+            .copied()
     }
 }
 
@@ -315,8 +691,10 @@ struct Control {
 }
 
 pub struct StableView {
-    table: &'static WvPlugin,
+    table: &'static WwPlugin,
     view: *mut c_void,
+    /// The source of the bytes of the view, freed after the view closes.
+    source: Option<*mut SourceBox>,
     texture: Option<egui::TextureHandle>,
     /// The size of the picture of the texture, in pixels.
     size: [u32; 2],
@@ -333,6 +711,10 @@ impl Drop for StableView {
         if let Some(close) = self.table.close {
             // SAFETY: the view of this plugin, closed once.
             unsafe { close(self.view) };
+        }
+        if let Some(source) = self.source.take() {
+            // SAFETY: the box of the source of the view, which closed; the plugin reads it no more.
+            drop(unsafe { Box::from_raw(source) });
         }
     }
 }
@@ -363,7 +745,7 @@ impl StableView {
                         let shown = c.choices.get(index).cloned().unwrap_or_default();
                         ui.label(&c.label);
                         let mut changed = false;
-                        egui::ComboBox::from_id_salt(("wv-stable", c.id))
+                        egui::ComboBox::from_id_salt(("ww-stable", c.id))
                             .selected_text(shown)
                             .show_ui(ui, |ui| {
                                 for (i, choice) in c.choices.iter().enumerate() {
@@ -389,7 +771,7 @@ impl StableView {
     ///
     /// # Safety
     /// `out` is the output the plugin wrote in its frame just now.
-    unsafe fn take(&mut self, ctx: &egui::Context, out: &WvOutput) {
+    unsafe fn take(&mut self, ctx: &egui::Context, out: &WwOutput) {
         // SAFETY: by the contract of the caller, every pointer of the output is the plugin's and
         // lives until its next call.
         unsafe {
@@ -408,7 +790,7 @@ impl StableView {
                     Some(t) => t.set(image, egui::TextureOptions::NEAREST),
                     None => {
                         self.texture = Some(ctx.load_texture(
-                            "wv-stable",
+                            "ww-stable",
                             image,
                             egui::TextureOptions::NEAREST,
                         ));
@@ -417,22 +799,26 @@ impl StableView {
                 self.size = [w, h];
             }
             self.controls.clear();
-            for i in 0..out.control_count.min(64) as usize {
-                let c = &*out.controls.add(i);
-                let mut choices = Vec::new();
-                for j in 0..c.choice_count.min(256) as usize {
-                    choices.push(text(*c.choices.add(j)));
+            if !out.controls.is_null() {
+                for i in 0..out.control_count.min(MOST) as usize {
+                    let c = &*out.controls.add(i);
+                    let mut choices = Vec::new();
+                    if !c.choices.is_null() {
+                        for j in 0..c.choice_count.min(256) as usize {
+                            choices.push(text(*c.choices.add(j)));
+                        }
+                    }
+                    self.controls.push(Control {
+                        id: c.id,
+                        kind: c.kind,
+                        label: text(c.label),
+                        value: c.value,
+                        min: c.min,
+                        max: c.max,
+                        step: c.step,
+                        choices,
+                    });
                 }
-                self.controls.push(Control {
-                    id: c.id,
-                    kind: c.kind,
-                    label: text(c.label),
-                    value: c.value,
-                    min: c.min,
-                    max: c.max,
-                    step: c.step,
-                    choices,
-                });
             }
             self.keys = out.keys;
             self.cursor = out.cursor;
@@ -454,7 +840,7 @@ impl View for StableView {
             }
         }
         if !self.controls.is_empty() {
-            egui::Panel::top("wv-stable-controls").show(ui, |ui| self.bar(ui));
+            egui::Panel::top(ui.id().with("ww-stable-controls")).show(ui, |ui| self.bar(ui));
         }
         egui::CentralPanel::default()
             .frame(egui::Frame::new())
@@ -463,11 +849,11 @@ impl View for StableView {
                 let keys = keys_of(self.keys);
                 let (_, got) = input::area(ui, ui.id().with("stable"), rect, &keys);
                 let scale = ui.ctx().pixels_per_point();
-                let names: Vec<WvKey> = got
+                let names: Vec<WwKey> = got
                     .keys
                     .iter()
                     .filter_map(|(k, m)| {
-                        name_of(*k).map(|n| WvKey {
+                        name_of(*k).map(|n| WwKey {
                             name: n.as_ptr(),
                             pressed: 1,
                             modifiers: modifiers(*m),
@@ -499,8 +885,8 @@ impl View for StableView {
                 if got.middle_clicked {
                     clicks |= MIDDLE;
                 }
-                let input = WvInput {
-                    size: std::mem::size_of::<WvInput>() as u32,
+                let input = WwInput {
+                    size: std::mem::size_of::<WwInput>() as u32,
                     width: (rect.width() * scale).round().max(1.0) as u32,
                     height: (rect.height() * scale).round().max(1.0) as u32,
                     scale,
@@ -521,8 +907,8 @@ impl View for StableView {
                     text: c"".as_ptr(),
                 };
                 // SAFETY: an output of zeros is a valid one; the plugin fills what it knows.
-                let mut out: WvOutput = unsafe { std::mem::zeroed() };
-                out.size = std::mem::size_of::<WvOutput>() as u32;
+                let mut out: WwOutput = unsafe { std::mem::zeroed() };
+                out.size = std::mem::size_of::<WwOutput>() as u32;
                 if let Some(frame) = self.table.frame {
                     // SAFETY: the input and the output live for the call; the view is this plugin's.
                     unsafe {
@@ -563,374 +949,4 @@ fn cursor(c: u32) -> Cursor {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::Mutex;
-    use std::sync::atomic::{AtomicU32, Ordering};
-
-    #[test]
-    fn the_structures_have_the_layout_of_the_header() {
-        // The sizes of wview.h on a target of 64 bits, as a compiler of C lays them out.
-        assert_eq!(std::mem::size_of::<WvFormat>(), 24);
-        assert_eq!(std::mem::size_of::<WvKey>(), 16);
-        assert_eq!(std::mem::size_of::<WvInput>(), 88);
-        assert_eq!(std::mem::size_of::<WvControl>(), 64);
-        assert_eq!(std::mem::size_of::<WvOutput>(), 64);
-        assert_eq!(std::mem::size_of::<WvPlugin>(), 64);
-        assert_eq!(std::mem::offset_of!(WvInput, keys), 64);
-        assert_eq!(std::mem::offset_of!(WvOutput, controls), 32);
-    }
-
-    /// A plugin of the stable interface written in Rust for the test, as one in C would be.
-    struct Picture {
-        frames: u32,
-        level: f64,
-    }
-
-    static CLOSED: AtomicU32 = AtomicU32::new(0);
-    static LAST: Mutex<Vec<String>> = Mutex::new(Vec::new());
-    static PIXELS: [u8; 16] = [255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 9, 9, 9, 255];
-
-    struct Frame {
-        controls: [WvControl; 2],
-        status: CString,
-    }
-
-    thread_local! {
-        // Kept between the frames of the test: what a plugin keeps until its next call.
-        static FRAME: std::cell::RefCell<Option<Box<Frame>>> = const { std::cell::RefCell::new(None) };
-    }
-
-    unsafe extern "C" fn open(path: *const c_char, error: *mut c_char, size: u32) -> *mut c_void {
-        // SAFETY: the host gives a path that ends with a zero and a buffer of `size` bytes.
-        unsafe {
-            let path = CStr::from_ptr(path).to_string_lossy();
-            if path.contains("bad") {
-                let why = c"no such picture".to_bytes_with_nul();
-                std::ptr::copy_nonoverlapping(
-                    why.as_ptr().cast(),
-                    error,
-                    why.len().min(size as usize),
-                );
-                return std::ptr::null_mut();
-            }
-        }
-        Box::into_raw(Box::new(Picture {
-            frames: 0,
-            level: 5.0,
-        }))
-        .cast()
-    }
-
-    unsafe extern "C" fn frame(view: *mut c_void, input: *const WvInput, out: *mut WvOutput) {
-        // SAFETY: the view this plugin opened; the input and the output of the host for the call.
-        unsafe {
-            let p = &mut *view.cast::<Picture>();
-            let input = &*input;
-            p.frames += 1;
-            let keys: Vec<String> = (0..input.key_count as usize)
-                .map(|i| {
-                    CStr::from_ptr((*input.keys.add(i)).name)
-                        .to_string_lossy()
-                        .into_owned()
-                })
-                .collect();
-            *LAST.lock().unwrap() = keys;
-            let kept = Box::new(Frame {
-                controls: [
-                    WvControl {
-                        id: 1,
-                        kind: SLIDER,
-                        label: c"Level".as_ptr(),
-                        value: p.level,
-                        min: 0.0,
-                        max: 10.0,
-                        step: 1.0,
-                        choices: std::ptr::null(),
-                        choice_count: 0,
-                    },
-                    WvControl {
-                        id: 2,
-                        kind: BUTTON,
-                        label: c"Reset".as_ptr(),
-                        value: 0.0,
-                        min: 0.0,
-                        max: 0.0,
-                        step: 0.0,
-                        choices: std::ptr::null(),
-                        choice_count: 0,
-                    },
-                ],
-                status: CString::new(format!(
-                    "frame {} of {} x {}, level {}",
-                    p.frames, input.width, input.height, p.level
-                ))
-                .unwrap(),
-            });
-            // The box stays where it is while the thread keeps it, so its pointers stay valid.
-            let f: *const Frame = &*kept;
-            FRAME.with(|frame| *frame.borrow_mut() = Some(kept));
-            let f = &*f;
-            let out = &mut *out;
-            out.width = 2;
-            out.height = 2;
-            out.stride = 8;
-            out.pixels = PIXELS.as_ptr();
-            out.changed = u32::from(p.frames == 1);
-            out.controls = f.controls.as_ptr();
-            out.control_count = 2;
-            out.keys = KEYS_ARROWS | KEYS_LETTERS;
-            out.cursor = 3;
-            out.status = f.status.as_ptr();
-        }
-    }
-
-    unsafe extern "C" fn control(view: *mut c_void, id: u32, value: f64) {
-        // SAFETY: the view this plugin opened.
-        let p = unsafe { &mut *view.cast::<Picture>() };
-        match id {
-            1 => p.level = value,
-            _ => p.level = 5.0,
-        }
-    }
-
-    unsafe extern "C" fn close(view: *mut c_void) {
-        // SAFETY: the view this plugin opened, closed once.
-        drop(unsafe { Box::from_raw(view.cast::<Picture>()) });
-        CLOSED.fetch_add(1, Ordering::SeqCst);
-    }
-
-    struct Table(WvPlugin);
-    // SAFETY: the table holds pointers to static data alone.
-    unsafe impl Sync for Table {}
-
-    static EXTENSIONS: [Pointer; 1] = [Pointer(c"pic".as_ptr())];
-    #[repr(transparent)]
-    struct Pointer(*const c_char);
-    // SAFETY: a pointer to a static text.
-    unsafe impl Sync for Pointer {}
-    struct Formats([WvFormat; 1]);
-    // SAFETY: pointers to static data alone.
-    unsafe impl Sync for Formats {}
-    static FORMATS: Formats = Formats([WvFormat {
-        name: c"Pictures of the test".as_ptr(),
-        extensions: EXTENSIONS.as_ptr().cast(),
-        extension_count: 1,
-    }]);
-    static TABLE: Table = Table(WvPlugin {
-        api_version: 1,
-        name: c"A stable plugin".as_ptr(),
-        formats: FORMATS.0.as_ptr(),
-        format_count: 1,
-        open: Some(open),
-        frame: Some(frame),
-        control: Some(control),
-        close: Some(close),
-    });
-
-    fn run(view: &mut Box<dyn View>, ctx: &egui::Context, events: Vec<egui::Event>) {
-        let settings = serde_json::Value::Null;
-        let mut host = Host::new(true, ww::PageWidth::View, &settings);
-        let input = egui::RawInput {
-            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, 300.0))),
-            events,
-            ..Default::default()
-        };
-        let mut output = ctx.run_ui(input, |ui| view.ui(ui, &mut host));
-        output.textures_delta.clear();
-    }
-
-    #[test]
-    fn a_plugin_of_the_stable_interface_is_a_plugin() {
-        // SAFETY: the table of the test is static.
-        let plugin = unsafe { wrap(&TABLE.0) }.unwrap();
-        assert_eq!(plugin.name(), "A stable plugin");
-        assert_eq!(plugin.formats()[0].extensions, ["pic"]);
-        let Err(why) = plugin.open(Path::new("bad.pic"), &serde_json::Value::Null) else {
-            panic!("the plugin refuses a bad file");
-        };
-        assert_eq!(why, "no such picture");
-        let mut view = plugin
-            .open(Path::new("good.pic"), &serde_json::Value::Null)
-            .unwrap();
-        let ctx = egui::Context::default();
-        run(&mut view, &ctx, Vec::new());
-        assert!(
-            view.status().starts_with("frame 1 of 400 x "),
-            "{}",
-            view.status()
-        );
-        // A click gives the view the keys it names; ArrowLeft and P are among them, F5 not.
-        let at = Pos2::new(200.0, 200.0);
-        let click = |pressed| egui::Event::PointerButton {
-            pos: at,
-            button: egui::PointerButton::Primary,
-            pressed,
-            modifiers: egui::Modifiers::NONE,
-        };
-        run(
-            &mut view,
-            &ctx,
-            vec![egui::Event::PointerMoved(at), click(true), click(false)],
-        );
-        let key = |key| egui::Event::Key {
-            key,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: egui::Modifiers::NONE,
-        };
-        run(
-            &mut view,
-            &ctx,
-            vec![key(Key::ArrowLeft), key(Key::P), key(Key::F5)],
-        );
-        assert_eq!(
-            *LAST.lock().unwrap(),
-            vec!["ArrowLeft".to_owned(), "p".to_owned()]
-        );
-        assert!(view.status().contains("level 5"));
-        drop(view);
-        assert_eq!(
-            CLOSED.load(Ordering::SeqCst),
-            1,
-            "a closed tab closes its view"
-        );
-    }
-
-    /// A plugin of the stable interface written with the crate `wview-stable`, as one of Rust of
-    /// another toolchain would be.
-    mod with_the_crate {
-        use wview_stable::{Control, Cursor, Format, Frame, Input, Picture, View, keys};
-
-        pub struct Grey {
-            level: f64,
-            pixels: Vec<u8>,
-        }
-
-        impl View for Grey {
-            fn frame(&mut self, input: &Input) -> Frame<'_> {
-                let v = (self.level * 25.0) as u8;
-                self.pixels = [v, v, v, 255].repeat(4);
-                let pressed: Vec<&str> = input.keys.iter().map(|k| k.name.as_str()).collect();
-                Frame {
-                    picture: Some(Picture::new(2, 2, &self.pixels)),
-                    changed: true,
-                    controls: vec![
-                        Control::slider(1, "Level", self.level, 0.0, 10.0, 1.0),
-                        Control::button(2, "Reset"),
-                    ],
-                    keys: keys::ARROWS,
-                    cursor: Cursor::Cross,
-                    again: false,
-                    status: format!(
-                        "{} x {}, level {}, keys {}",
-                        input.width,
-                        input.height,
-                        self.level,
-                        pressed.join(" ")
-                    ),
-                }
-            }
-
-            fn control(&mut self, id: u32, value: f64) {
-                self.level = if id == 1 { value } else { 5.0 };
-            }
-        }
-
-        wview_stable::plugin! {
-            name: "Grey of the crate",
-            formats: &[Format { name: "Grey files", extensions: &["grey"] }],
-            view: Grey,
-            open: |path: &str| {
-                if path.ends_with(".grey") {
-                    Ok(Grey { level: 5.0, pixels: Vec::new() })
-                } else {
-                    Err(format!("{path} is no grey file"))
-                }
-            },
-        }
-    }
-
-    /// The two sides of `wview.h` checked against each other: the table the crate makes, wrapped
-    /// by this host and drawn.
-    #[test]
-    fn a_plugin_written_with_the_crate_is_a_plugin() {
-        use wview_stable::ffi;
-        assert_eq!(
-            std::mem::size_of::<ffi::WvInput>(),
-            std::mem::size_of::<WvInput>()
-        );
-        assert_eq!(
-            std::mem::size_of::<ffi::WvOutput>(),
-            std::mem::size_of::<WvOutput>()
-        );
-        assert_eq!(
-            std::mem::size_of::<ffi::WvControl>(),
-            std::mem::size_of::<WvControl>()
-        );
-        assert_eq!(
-            std::mem::size_of::<ffi::WvPlugin>(),
-            std::mem::size_of::<WvPlugin>()
-        );
-        let table = with_the_crate::wv_plugin_get();
-        // SAFETY: the table of the crate has the layout of the header and lives for the run.
-        let plugin = unsafe { wrap(&*table.cast::<WvPlugin>()) }.unwrap();
-        assert_eq!(plugin.name(), "Grey of the crate");
-        assert_eq!(plugin.formats()[0].extensions, ["grey"]);
-        let Err(why) = plugin.open(Path::new("a.pic"), &serde_json::Value::Null) else {
-            panic!("the plugin refuses a file of another format");
-        };
-        assert_eq!(why, "a.pic is no grey file");
-        let mut view = plugin
-            .open(Path::new("a.grey"), &serde_json::Value::Null)
-            .unwrap();
-        let ctx = egui::Context::default();
-        run(&mut view, &ctx, Vec::new());
-        assert!(view.status().starts_with("400 x "), "{}", view.status());
-        let at = Pos2::new(200.0, 200.0);
-        let click = |pressed| egui::Event::PointerButton {
-            pos: at,
-            button: egui::PointerButton::Primary,
-            pressed,
-            modifiers: egui::Modifiers::NONE,
-        };
-        run(
-            &mut view,
-            &ctx,
-            vec![egui::Event::PointerMoved(at), click(true), click(false)],
-        );
-        let key = egui::Event::Key {
-            key: Key::ArrowRight,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: egui::Modifiers::NONE,
-        };
-        run(&mut view, &ctx, vec![key]);
-        assert!(
-            view.status().ends_with("level 5, keys ArrowRight"),
-            "{}",
-            view.status()
-        );
-    }
-
-    #[test]
-    fn a_table_of_another_version_is_refused() {
-        static OLD: Table = Table(WvPlugin {
-            api_version: 2,
-            name: c"Later".as_ptr(),
-            formats: std::ptr::null(),
-            format_count: 0,
-            open: Some(open),
-            frame: Some(frame),
-            control: None,
-            close: Some(close),
-        });
-        // SAFETY: the table of the test is static.
-        let Err(why) = (unsafe { wrap(&OLD.0) }) else {
-            panic!("a version this host does not know");
-        };
-        assert!(why.contains("stable interface 2"), "{why}");
-    }
-}
+mod tests;

@@ -1,0 +1,17 @@
+[package]
+name = "ww-demo"
+description = "The demo of W#: every part of the window and of the system of its plugins, once"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# wwrt alone: every crate the window needs comes through it (docs/plugins.md).
+wwrt = { path = "../../crates/wwrt" }
+
+[dev-dependencies]
+# The tests draw the window with egui_kittest and take the template of a plugin as a library.
+wwrt = { path = "../../crates/wwrt", features = ["kittest"] }
+ww-hello = { path = "../ww-hello", features = ["library"] }

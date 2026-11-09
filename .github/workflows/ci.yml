@@ -1,9 +1,10 @@
 name: CI
 
-# CI runs on demand alone, with the word of the user (AGENTS.md, section 4): the checks on Linux
-# for Windows first, then the tests on Windows, the template of a native plugin and the example of
-# the stable interface built by the compiler of Visual Studio. checks=false leaves out the Linux job
-# (its checks ran on the computer of the developer).
+# CI runs on demand alone, with the word of the owner (AGENTS.md, section 4): the checks on Linux
+# for Windows first, then on Windows the tests, the release builds of the workspace and of the
+# plugin of stable Rust, the plugin in C built by the compiler of Visual Studio, the demo listing
+# and drawing its plugins without a window, and the archive of the demo. checks=false leaves out
+# the Linux job (its checks ran on the computer of the developer).
 on:
   workflow_dispatch:
     inputs:
@@ -32,16 +33,23 @@ jobs:
           targets: x86_64-pc-windows-gnu, wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
       - name: Format check
-        run: cargo fmt --all --check
+        run: |
+          cargo fmt --all --check
+          cd examples/ww-grey && cargo fmt --check
       - name: Clippy (the workspace, checked for Windows)
         run: cargo clippy --workspace --all-targets --target x86_64-pc-windows-gnu -- -D warnings
+      - name: Clippy of the plugin of stable Rust
+        working-directory: examples/ww-grey
+        env:
+          RUSTFLAGS: "-C debuginfo=0"
+        run: cargo clippy --all-targets --target x86_64-pc-windows-gnu -- -D warnings
       - name: Clippy of W# for the browser
         run: cargo clippy -p ww --no-default-features --features glow --target wasm32-unknown-unknown -- -D warnings
       - name: Tests of ww-base
         run: cargo test -p ww-base
 
   windows:
-    name: Tests and the examples (Windows)
+    name: Tests, the demo and its plugins (Windows)
     needs: check
     if: ${{ !cancelled() && needs.check.result != 'failure' }}
     runs-on: windows-latest
@@ -55,18 +63,34 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Tests
         run: cargo test --workspace
-      - name: The template of a native plugin, in release
-        run: cargo build --release -p wv-hello
-      - name: The example of the stable interface, built with the compiler of Visual Studio
-        # A plugin in C: no part of Rust, so any host of the stable interface loads it. The CRT is
-        # linked in (/MT), so it needs no DLL of the Visual C++ runtime.
+      - name: The release builds
+        # build-all.cmd builds the workspace, the plugin of stable Rust apart (its RUSTFLAGS link
+        # std and the C runtime in) and the plugin in C with the cl vswhere finds (/MT), and packs
+        # dist\ww-demo with the std-<hash>.dll the demo imports.
+        shell: cmd
+        run: build-all.cmd < NUL
+      - name: The demo lists its plugins and draws them without a window
         shell: pwsh
         run: |
-          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-          $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
-          $vcvars = Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat'
-          $out = Join-Path $env:RUNNER_TEMP 'stable'
-          New-Item -ItemType Directory -Force $out | Out-Null
-          cmd /c "`"$vcvars`" >nul && cl /nologo /LD /O2 /MT /W3 /std:c11 /I stable examples\wv-mandelbrot\mandelbrot.c /Fo$out\ /Fe$out\wv_mandelbrot.dll"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Get-ChildItem $out | Select-Object Length, Name | Format-Table -AutoSize
+          $demo = "dist\ww-demo\ww-demo.exe"
+          $list = & $demo --plugins | Out-String
+          Write-Output $list
+          foreach ($name in "Hello, the template of a plugin", "Mandelbrot set (C)", "Bytes as a picture (stable Rust)", "Bundles of parts", "Texts") {
+            if (-not $list.Contains($name)) { throw "the plugin $name is not loaded" }
+          }
+          if ($list.Contains("not loaded")) { throw "a DLL of the folder plugins did not load" }
+          & $demo --probe dist\ww-demo\samples\seahorse.mandel
+          if ($LASTEXITCODE -ne 0) { throw "the plugin in C did not draw" }
+          & $demo --probe dist\ww-demo\samples\demo.wwbundle
+          if ($LASTEXITCODE -ne 0) { throw "the bundle did not draw" }
+          & $demo --probe dist\ww-demo\wwrt.dll
+          if ($LASTEXITCODE -ne 0) { throw "the plugin of any bytes did not draw" }
+      - name: The window draws (OpenGL or DirectX 12 on WARP)
+        shell: pwsh
+        run: |
+          & dist\ww-demo\ww-demo.exe --smoke-window
+          if ($LASTEXITCODE -ne 0) { throw "no renderer started" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ww-demo
+          path: dist/ww-demo-*.zip

@@ -7,6 +7,7 @@
 mod bar;
 mod jobs;
 mod nav;
+mod page;
 mod settings;
 mod status;
 mod tabs;
@@ -19,6 +20,7 @@ use eframe::egui;
 
 use crate::commands::Item;
 use crate::doc::{Document, Scrolled, Search};
+use crate::embedded::Embedded;
 use crate::folders::{dir, exe_dir};
 use crate::i18n::{self, tr, trf};
 use crate::question::Question;
@@ -28,6 +30,7 @@ use crate::themeview::ThemeDoc;
 use crate::{icons, session};
 
 pub use jobs::Job;
+pub use page::{PageDoc, is_page};
 pub use tabs::{menu_entry, menu_entry_colored, menu_item, sub_menu};
 pub use window::{COMPACT_WIDTH, WINDOW_MIN_SIZE, WINDOW_SIZE, Window};
 
@@ -86,6 +89,8 @@ pub enum ShellDoc {
     Settings(SettingsDoc),
     /// The editor of a theme.
     Theme(Box<ThemeDoc>),
+    /// A page of a set of embedded files (`Shell::open_page`).
+    Page(Box<PageDoc>),
 }
 
 impl Document for ShellDoc {
@@ -93,6 +98,7 @@ impl Document for ShellDoc {
         match self {
             ShellDoc::Settings(_) => tr("Settings").to_owned(),
             ShellDoc::Theme(t) => t.title(),
+            ShellDoc::Page(p) => p.doc.title.clone(),
         }
     }
 
@@ -102,8 +108,22 @@ impl Document for ShellDoc {
 
     fn path(&self) -> Option<&Path> {
         match self {
-            ShellDoc::Settings(_) => None,
+            ShellDoc::Settings(_) | ShellDoc::Page(_) => None,
             ShellDoc::Theme(t) => t.theme.path.as_deref(),
+        }
+    }
+
+    fn search(&mut self) -> Option<&mut Search> {
+        match self {
+            ShellDoc::Page(p) => Some(&mut p.doc.search),
+            _ => None,
+        }
+    }
+
+    fn search_hint(&self) -> &'static str {
+        match self {
+            ShellDoc::Page(_) => "Search the page (Ctrl+F)",
+            _ => "",
         }
     }
 
@@ -111,17 +131,18 @@ impl Document for ShellDoc {
         match self {
             ShellDoc::Settings(_) => icons::GEAR,
             ShellDoc::Theme(_) => icons::PALETTE,
+            ShellDoc::Page(_) => icons::BOOK,
         }
     }
 
     fn has_tools(&self) -> bool {
-        matches!(self, ShellDoc::Theme(_))
+        matches!(self, ShellDoc::Theme(_) | ShellDoc::Page(_))
     }
 
     fn draft_key(&self) -> Option<String> {
         match self {
             ShellDoc::Theme(t) => Some(t.draft.key.clone()),
-            ShellDoc::Settings(_) => None,
+            ShellDoc::Settings(_) | ShellDoc::Page(_) => None,
         }
     }
 
@@ -195,6 +216,9 @@ pub enum ShellAct<A: App> {
     ShowInFolder(PathBuf),
     /// A link of a page that is not a web address: the program opens what it names.
     OpenLink(String),
+    /// A file of a set of embedded files by its path in the set, with the heading after `#`
+    /// (`App::open_embedded`): a page in a tab of the window.
+    OpenEmbedded(Embedded, String),
     Exit,
     /// Saves a tab, then closes it when the save left no changes (the question of a tab with
     /// changes).
@@ -319,6 +343,15 @@ pub trait App: Sized + 'static {
     /// Opens a page or a file a link names: a `.md` or `.txt` file, a file without an extension
     /// or a page of the program (the window asks before any other link and opens it outside).
     fn open_link(&mut self, _shell: &mut Shell<Self>, _link: &str) {}
+
+    /// Opens a file of a set of embedded files (`ShellAct::OpenEmbedded`, a link of a page of
+    /// the set): a page in a tab of the window (`Shell::open_page`); a program that shows other
+    /// files (a plugin of their type) opens the others itself.
+    fn open_embedded(&mut self, shell: &mut Shell<Self>, files: Embedded, link: &str) {
+        if let Err(why) = shell.open_page(files, link) {
+            shell.status = why;
+        }
+    }
 
     /// The lines of the window About under the name of the program: the version, the settings
     /// file, what the window draws with; a program adds its own.
@@ -524,9 +557,14 @@ impl<A: App> Shell<A> {
         self.docs.get_mut(self.active)
     }
 
-    /// The search of the active tab, `None` for a tab without one.
+    /// The search of the active tab, `None` for a tab without one; a document of the window
+    /// (a page of a set) has its own.
     pub fn active_search(&mut self) -> Option<&mut Search> {
-        self.docs.get_mut(self.active)?.search()
+        let doc = self.docs.get_mut(self.active)?;
+        if doc.shell_doc().is_some() {
+            return doc.shell_doc_mut()?.search();
+        }
+        doc.search()
     }
 
     /// Whether the active tab has commands in the command bar.
@@ -546,7 +584,12 @@ impl<A: App> Shell<A> {
 
     /// The hint of the search field of the active tab.
     pub fn search_hint_now(&self) -> &'static str {
-        self.active_doc().map_or("", Document::search_hint)
+        match self.active_doc() {
+            Some(d) => d
+                .shell_doc()
+                .map_or_else(|| d.search_hint(), Document::search_hint),
+            None => "",
+        }
     }
 
     /// Brings the tab the predicate accepts to the front, making it when there is none, and

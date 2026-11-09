@@ -12,7 +12,7 @@ publish.workspace = true
 crate-type = ["dylib"]
 
 [features]
-# egui_kittest for the tests of a window (wview, a plugin): a dev-dependency of their own on it would
+# egui_kittest for the tests of a window (a program, a plugin): a dev-dependency of their own on it would
 # bring a second egui, so it comes through wwrt as `wwrt::egui_kittest`.
 kittest = ["dep:egui_kittest"]
 
@@ -55,4 +55,4 @@ windows-sys = { version = "0.61", features = ["Win32_System_Diagnostics_Debug"] 
 
 [dev-dependencies]
 # A plugin of the stable interface written with the crate, wrapped by this host in the tests.
-wview-stable = { path = "../../stable/rust" }
+ww-stable = { path = "../../stable/rust" }

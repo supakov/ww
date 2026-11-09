@@ -14,6 +14,7 @@ use ww::eframe::egui;
 use ww::i18n::{tr, trf};
 use ww::style;
 
+use crate::blocks::BlockFile;
 use crate::plugin::{Host, Request, View};
 
 /// The most views inside one another under the view of a tab.
@@ -31,7 +32,7 @@ pub struct Inner {
     /// The name of the bytes, their MIME type and their size.
     pub name: String,
     pub mime: String,
-    pub size: usize,
+    pub size: u64,
     view: Box<dyn View>,
     id: egui::Id,
     /// How deep the inner view is: 1 inside the view of a tab.
@@ -47,7 +48,7 @@ impl Host<'_> {
 
     /// A view of some bytes under a name by the first plugin of their MIME type that opens
     /// them, for the view of this host to keep and draw (`Inner::ui`), or why there is none.
-    pub fn open_inside(&self, name: &str, mime: &str, bytes: Vec<u8>) -> Result<Inner, String> {
+    pub fn open_inside(&self, name: &str, mime: &str, bytes: BlockFile) -> Result<Inner, String> {
         if self.depth >= DEPTH {
             return Err(trf(
                 "views inside views stop at a depth of {n}",
@@ -166,9 +167,10 @@ mod tests {
 
     impl View for Nested {
         fn ui(&mut self, ui: &mut egui::Ui, host: &mut Host) {
-            let inner = self
-                .0
-                .get_or_insert_with(|| host.open_inside("self", "application/x-nested", vec![1]));
+            let inner = self.0.get_or_insert_with(|| {
+                let bytes = BlockFile::from_bytes(vec![1]);
+                host.open_inside("self", "application/x-nested", bytes)
+            });
             if let Ok(inner) = inner {
                 inner.ui(ui, host);
             }
@@ -205,7 +207,7 @@ mod tests {
             &self,
             _: &str,
             _: &str,
-            _: Vec<u8>,
+            _: BlockFile,
             _: &Value,
         ) -> Result<Box<dyn View>, String> {
             Ok(Box::new(Nested(None)))

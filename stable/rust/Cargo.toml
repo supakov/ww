@@ -1,10 +1,10 @@
 [package]
-name = "wview-stable"
-description = "Plugins of the stable interface of wview (wview.h, version 1) in Rust of any toolchain"
-# The version of the crate follows the interface: 1.x writes wview.h version 1.
+name = "ww-stable"
+description = "Plugins of the stable interface of W# (ww.h, version 1) in Rust of any toolchain"
+# The version of the crate follows the interface: 1.x writes ww.h version 1.
 version = "1.0.0"
 # Its own fields, none of the workspace: the folder copies out whole into a project of its own,
-# built by another toolchain than the one of a release of wview.
+# built by another toolchain than the one of the host.
 edition = "2021"
 rust-version = "1.77"
 license = "MIT"

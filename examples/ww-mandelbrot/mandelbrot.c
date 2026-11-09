@@ -1,9 +1,11 @@
-/* wv-mandelbrot: the example of the stable interface of wview (wview.h, docs/plugins.md 6.10).
+/* ww-mandelbrot: the example of the stable interface of W# (ww.h, docs/stable.md).
  *
  * It opens a .mandel file, a few lines of text with the view (centre, zoom, iterations, palette,
- * smooth colours), and saves the view back with Save. The picture is drawn in steps: blocks of
- * 8 pixels at once, then of 4, 2 and 1, each frame within a few milliseconds, so the window never
- * waits.
+ * smooth colours), read through the cache of the host (ww_host), and saves the view back with
+ * Save. It opens the same text as some bytes (a source: a part of another file, a file it
+ * embeds), finds its type in the first bytes of a file of any name (sniff), and embeds a page of
+ * its own and a sample. The picture is drawn in steps: blocks of 8 pixels at once, then of 4, 2
+ * and 1, each frame within a few milliseconds, so the window never waits.
  *
  * The mouse: the wheel zooms at the pointer, a drag moves the picture, Shift and a drag draws a
  * rectangle that the release zooms into, a double click centres and zooms in, the right button
@@ -11,22 +13,25 @@
  * iterations, P takes the next palette, Home resets, Escape drops a rectangle.
  *
  * Build (the toolchain of Visual Studio, x64; the CRT linked in, so no DLL of it is needed):
- *   cl /nologo /LD /O2 /MT /W3 /std:c11 /I .. mandelbrot.c /Fe:wv_mandelbrot.dll
+ *   cl /nologo /LD /O2 /MT /W3 /std:c11 /I ..\..\stable mandelbrot.c /Fe:ww_mandelbrot.dll
  */
 #define _CRT_SECURE_NO_WARNINGS
 #define WIN32_LEAN_AND_MEAN
 #include <math.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <windows.h>
 
-#include "wview.h"
+#include "ww.h"
 
 #define BUDGET_MS 12.0
 #define MIN_ITERATIONS 16
 #define MAX_ITERATIONS 100000
+/* The largest text of a view the plugin reads. */
+#define MAX_BYTES 65536
 
 enum {
     C_ITERATIONS = 1,
@@ -57,7 +62,7 @@ typedef struct view {
     float rx0, ry0, rx1, ry1;
     char note[256];   /* what the last save did */
     char status[512];
-    wv_control controls[C_COUNT];
+    ww_control controls[C_COUNT];
 } view;
 
 static double now_ms(void) {
@@ -255,7 +260,14 @@ static const uint8_t *with_rectangle(view *v) {
     return v->shown;
 }
 
-/* A file of a path of UTF-8, as wview gives it: a name outside ASCII opens too. */
+/* The table of the host, given to ww_plugin_get. */
+static const ww_host *HOST;
+
+/* Whether the table of the host holds a field. */
+#define HOST_HAS(field) \
+    (HOST && HOST->size >= offsetof(ww_host, field) + sizeof(HOST->field) && HOST->field)
+
+/* A file of a path of UTF-8, as the host gives it: a name outside ASCII opens too. */
 static FILE *open_utf8(const char *path, const wchar_t *mode) {
     wchar_t wide[2048];
     if (!MultiByteToWideChar(CP_UTF8, 0, path, -1, wide, 2048)) return NULL;
@@ -263,7 +275,12 @@ static FILE *open_utf8(const char *path, const wchar_t *mode) {
 }
 
 static void save(view *v) {
-    FILE *f = open_utf8(v->path, L"w");
+    FILE *f;
+    if (!v->path[0]) {
+        snprintf(v->note, sizeof v->note, "not saved: some bytes, no file");
+        return;
+    }
+    f = open_utf8(v->path, L"w");
     if (!f) {
         snprintf(v->note, sizeof v->note, "not saved: %s", v->path);
         return;
@@ -275,22 +292,31 @@ static void save(view *v) {
     snprintf(v->note, sizeof v->note, "saved");
 }
 
-static void read_view(view *v, FILE *f) {
-    char line[256];
-    while (fgets(line, sizeof line, f)) {
-        char key[64], value[128];
-        if (sscanf(line, " %63[a-z_] = %127s", key, value) != 2) continue;
-        if (!strcmp(key, "center_x")) v->cx = atof(value);
-        else if (!strcmp(key, "center_y")) v->cy = atof(value);
-        else if (!strcmp(key, "zoom")) v->zoom = atof(value);
-        else if (!strcmp(key, "iterations")) v->iterations = atoi(value);
-        else if (!strcmp(key, "smooth")) v->smooth = atoi(value) != 0;
-        else if (!strcmp(key, "palette")) {
-            int i;
-            for (i = 0; i < 4; i++) {
-                if (!strcmp(value, PALETTES[i])) v->palette = i;
+/* The view of the lines of a text: "key = value" each. */
+static void read_view(view *v, const char *text) {
+    const char *line = text;
+    while (*line) {
+        char buffer[256], key[64], value[128];
+        const char *end = strchr(line, '\n');
+        size_t n = end ? (size_t)(end - line) : strlen(line);
+        if (n >= sizeof buffer) n = sizeof buffer - 1;
+        memcpy(buffer, line, n);
+        buffer[n] = 0;
+        if (sscanf(buffer, " %63[a-z_] = %127s", key, value) == 2) {
+            if (!strcmp(key, "center_x")) v->cx = atof(value);
+            else if (!strcmp(key, "center_y")) v->cy = atof(value);
+            else if (!strcmp(key, "zoom")) v->zoom = atof(value);
+            else if (!strcmp(key, "iterations")) v->iterations = atoi(value);
+            else if (!strcmp(key, "smooth")) v->smooth = atoi(value) != 0;
+            else if (!strcmp(key, "palette")) {
+                int i;
+                for (i = 0; i < 4; i++) {
+                    if (!strcmp(value, PALETTES[i])) v->palette = i;
+                }
             }
         }
+        if (!end) break;
+        line = end + 1;
     }
     if (!(v->zoom > 0.1)) v->zoom = 0.1;
     if (v->zoom > 1e14) v->zoom = 1e14;
@@ -302,25 +328,98 @@ static void read_view(view *v, FILE *f) {
     }
 }
 
-static void *wv_open(const char *path, char *error, uint32_t error_size) {
-    FILE *f = open_utf8(path, L"r");
-    view *v;
-    if (!f) {
-        snprintf(error, error_size, "the file does not open: %s", path);
+/* The bytes of a source of the host as a text that ends with a zero, or NULL with the reason. */
+static char *read_source(const ww_source *s, char *error, uint32_t error_size) {
+    uint64_t done = 0;
+    char *text;
+    if (s->length > MAX_BYTES) {
+        snprintf(error, error_size, "%llu bytes, more than a view of the set takes",
+                 (unsigned long long)s->length);
         return NULL;
     }
-    v = (view *)calloc(1, sizeof(view));
-    if (!v) {
+    text = (char *)malloc((size_t)s->length + 1);
+    if (!text) {
+        snprintf(error, error_size, "no memory");
+        return NULL;
+    }
+    while (done < s->length) {
+        uint32_t n = s->read(s->self, done, (uint8_t *)text + done, (uint32_t)(s->length - done));
+        if (n == 0) break;
+        done += n;
+    }
+    text[done] = 0;
+    return text;
+}
+
+/* The text of a file: through the cache of the host when it reads files, else read here. */
+static char *read_file(const char *path, char *error, uint32_t error_size) {
+    if (HOST_HAS(open_file) && HOST_HAS(close_source)) {
+        const ww_source *s = HOST->open_file(path, error, error_size);
+        char *text;
+        if (!s) return NULL;
+        text = read_source(s, error, error_size);
+        HOST->close_source(s);
+        return text;
+    } else {
+        FILE *f = open_utf8(path, L"rb");
+        char *text = (char *)calloc(1, MAX_BYTES + 1);
+        if (!f || !text) {
+            if (f) fclose(f);
+            free(text);
+            snprintf(error, error_size, "the file does not open: %s", path);
+            return NULL;
+        }
+        fread(text, 1, MAX_BYTES, f);
         fclose(f);
+        return text;
+    }
+}
+
+/* A view of a text; the path is the file Save writes, empty for some bytes. */
+static void *view_of(const char *text, const char *path, char *error, uint32_t error_size) {
+    view *v = (view *)calloc(1, sizeof(view));
+    if (!v) {
         snprintf(error, error_size, "no memory");
         return NULL;
     }
     snprintf(v->path, sizeof v->path, "%s", path);
     reset(v);
-    read_view(v, f);
-    fclose(f);
+    read_view(v, text);
     restart(v);
     return v;
+}
+
+static void *ww_open(const char *path, char *error, uint32_t error_size) {
+    char *text = read_file(path, error, error_size);
+    void *v;
+    if (!text) return NULL;
+    v = view_of(text, path, error, error_size);
+    free(text);
+    return v;
+}
+
+/* Some bytes as a view: a part of another file, a file of the set the plugin embeds. */
+static void *ww_open_bytes(const ww_source *source, const char *name, const char *mime,
+                           char *error, uint32_t error_size) {
+    char *text = read_source(source, error, error_size);
+    view *v;
+    (void)mime;
+    if (!text) return NULL;
+    v = (view *)view_of(text, "", error, error_size);
+    free(text);
+    if (v) snprintf(v->note, sizeof v->note, "from %s", name);
+    return v;
+}
+
+static const char *const MIMES[1] = {"application/x-mandelbrot"};
+
+/* The type of the first bytes: a text with the lines of a view. */
+static const char *ww_sniff(const uint8_t *bytes, uint32_t count) {
+    char head[513];
+    uint32_t n = count < 512 ? count : 512;
+    memcpy(head, bytes, n);
+    head[n] = 0;
+    return strstr(head, "center_x") && strstr(head, "zoom") ? MIMES[0] : NULL;
 }
 
 static void set_iterations(view *v, double value) {
@@ -331,7 +430,7 @@ static void set_iterations(view *v, double value) {
     restart(v);
 }
 
-static void wv_control_(void *p, uint32_t id, double value) {
+static void ww_control_(void *p, uint32_t id, double value) {
     view *v = (view *)p;
     switch (id) {
     case C_ITERATIONS: set_iterations(v, value); break;
@@ -345,7 +444,7 @@ static void wv_control_(void *p, uint32_t id, double value) {
     }
 }
 
-static void keys(view *v, const wv_input *in) {
+static void keys(view *v, const ww_input *in) {
     uint32_t i;
     double u = unit(v);
     for (i = 0; i < in->key_count; i++) {
@@ -366,21 +465,21 @@ static void keys(view *v, const wv_input *in) {
     }
 }
 
-static void mouse(view *v, const wv_input *in) {
-    int shift = (in->modifiers & WV_SHIFT) != 0;
+static void mouse(view *v, const ww_input *in) {
+    int shift = (in->modifiers & WW_SHIFT) != 0;
     if (in->hovered && in->wheel_y != 0) {
         zoom_at(v, pow(1.25, -in->wheel_y), in->mouse_x, in->mouse_y);
     }
-    if (in->double_clicks & WV_LEFT) {
+    if (in->double_clicks & WW_LEFT) {
         double x, y;
         plane(v, in->mouse_x, in->mouse_y, &x, &y);
         v->cx = x;
         v->cy = y;
         zoom_at(v, 2.0, v->width / 2.0, v->height / 2.0);
-    } else if (in->clicks & WV_RIGHT) {
+    } else if (in->clicks & WW_RIGHT) {
         zoom_at(v, 0.5, in->mouse_x, in->mouse_y);
     }
-    if (in->buttons & WV_LEFT) {
+    if (in->buttons & WW_LEFT) {
         if (shift || v->rect_on) {
             if (!v->rect_on) {
                 v->rect_on = 1;
@@ -412,21 +511,21 @@ static void mouse(view *v, const wv_input *in) {
     }
 }
 
-static void wv_frame(void *p, const wv_input *in, wv_output *out) {
+static void ww_frame(void *p, const ww_input *in, ww_output *out) {
     view *v = (view *)p;
     uint32_t w = in->width ? in->width : 1, h = in->height ? in->height : 1;
     resize(v, w, h);
     keys(v, in);
     mouse(v, in);
     render(v);
-    v->controls[0] = (wv_control){C_ITERATIONS, WV_SLIDER, "Iterations", v->iterations,
+    v->controls[0] = (ww_control){C_ITERATIONS, WW_SLIDER, "Iterations", v->iterations,
                                   MIN_ITERATIONS, 4096, 16, NULL, 0};
-    v->controls[1] = (wv_control){C_PALETTE, WV_CHOICE, "Palette", v->palette, 0, 3, 1, PALETTES, 4};
-    v->controls[2] = (wv_control){C_SMOOTH, WV_TOGGLE, "Smooth colours", v->smooth, 0, 1, 1, NULL, 0};
-    v->controls[3] = (wv_control){C_ZOOM_IN, WV_BUTTON, "Zoom in", 0, 0, 0, 0, NULL, 0};
-    v->controls[4] = (wv_control){C_ZOOM_OUT, WV_BUTTON, "Zoom out", 0, 0, 0, 0, NULL, 0};
-    v->controls[5] = (wv_control){C_RESET, WV_BUTTON, "Reset", 0, 0, 0, 0, NULL, 0};
-    v->controls[6] = (wv_control){C_SAVE, WV_BUTTON, "Save", 0, 0, 0, 0, NULL, 0};
+    v->controls[1] = (ww_control){C_PALETTE, WW_CHOICE, "Palette", v->palette, 0, 3, 1, PALETTES, 4};
+    v->controls[2] = (ww_control){C_SMOOTH, WW_TOGGLE, "Smooth colours", v->smooth, 0, 1, 1, NULL, 0};
+    v->controls[3] = (ww_control){C_ZOOM_IN, WW_BUTTON, "Zoom in", 0, 0, 0, 0, NULL, 0};
+    v->controls[4] = (ww_control){C_ZOOM_OUT, WW_BUTTON, "Zoom out", 0, 0, 0, 0, NULL, 0};
+    v->controls[5] = (ww_control){C_RESET, WW_BUTTON, "Reset", 0, 0, 0, 0, NULL, 0};
+    v->controls[6] = (ww_control){C_SAVE, WW_BUTTON, "Save", 0, 0, 0, 0, NULL, 0};
     if (v->step == 0) {
         snprintf(v->status, sizeof v->status,
                  "%.15g %+.15gi, zoom %.4gx, %d iterations, %s, %.1f ms%s%s", v->cx, v->cy,
@@ -444,16 +543,16 @@ static void wv_frame(void *p, const wv_input *in, wv_output *out) {
     v->changed = 0;
     out->controls = v->controls;
     out->control_count = C_COUNT;
-    out->keys = WV_KEYS_ARROWS | WV_KEYS_PAGES | WV_KEYS_LETTERS | WV_KEYS_SIGNS |
-                (v->rect_on ? WV_KEYS_ESCAPE : 0);
-    if (v->rect_on || (in->modifiers & WV_SHIFT)) out->cursor = WV_CURSOR_CROSS;
-    else if (in->buttons & WV_LEFT) out->cursor = WV_CURSOR_GRABBING;
-    else out->cursor = WV_CURSOR_GRAB;
+    out->keys = WW_KEYS_ARROWS | WW_KEYS_PAGES | WW_KEYS_LETTERS | WW_KEYS_SIGNS |
+                (v->rect_on ? WW_KEYS_ESCAPE : 0);
+    if (v->rect_on || (in->modifiers & WW_SHIFT)) out->cursor = WW_CURSOR_CROSS;
+    else if (in->buttons & WW_LEFT) out->cursor = WW_CURSOR_GRABBING;
+    else out->cursor = WW_CURSOR_GRAB;
     out->again = v->step != 0;
     out->status = v->status;
 }
 
-static void wv_close(void *p) {
+static void ww_close(void *p) {
     view *v = (view *)p;
     if (!v) return;
     free(v->picture);
@@ -461,9 +560,42 @@ static void wv_close(void *p) {
     free(v);
 }
 
-static const char *const EXTENSIONS[1] = {"mandel"};
-static const wv_format FORMATS[1] = {{"Mandelbrot set", EXTENSIONS, 1}};
-static const wv_plugin PLUGIN = {WV_API_VERSION, "Mandelbrot set (C)", FORMATS, 1,
-                                 wv_open,        wv_frame,             wv_control_, wv_close};
+/* The page and the sample the plugin embeds. */
+static const char GUIDE[] =
+    "# The Mandelbrot set (C)\n"
+    "\n"
+    "A plugin of the stable interface of W# written in C (`ww.h`). It opens `.mandel` files,\n"
+    "and any text with the lines of a view, and draws the set in steps.\n"
+    "\n"
+    "- The wheel zooms at the pointer, a drag moves the picture, Shift and a drag draws a\n"
+    "  rectangle the release zooms into, a double click centres and zooms in, the right button\n"
+    "  zooms out.\n"
+    "- The arrows move, `+` and `-` zoom, Page Up and Page Down double or halve the iterations,\n"
+    "  `P` takes the next palette, Home resets.\n"
+    "- Save writes the view back into its file.\n"
+    "\n"
+    "Open [the valley of the sea horses](samples/seahorse.mandel), a file the plugin embeds.\n";
 
-WV_EXPORT const wv_plugin *wv_plugin_get(void) { return &PLUGIN; }
+static const char SAMPLE[] =
+    "center_x = -0.743643887037151\n"
+    "center_y = 0.13182590420533\n"
+    "zoom = 180\n"
+    "iterations = 1024\n"
+    "palette = classic\n"
+    "smooth = 1\n";
+
+static const ww_file FILES[2] = {
+    {"guide.md", (const uint8_t *)GUIDE, sizeof GUIDE - 1},
+    {"samples/seahorse.mandel", (const uint8_t *)SAMPLE, sizeof SAMPLE - 1},
+};
+
+static const char *const EXTENSIONS[1] = {"mandel"};
+static const ww_format FORMATS[1] = {{"Mandelbrot set", EXTENSIONS, 1, MIMES, 1}};
+static const ww_plugin PLUGIN = {
+    WW_API_VERSION, sizeof(ww_plugin), "Mandelbrot set (C)", FORMATS, 1, FILES, 2,
+    ww_open, ww_open_bytes, ww_sniff, ww_frame, ww_control_, ww_close};
+
+WW_EXPORT const ww_plugin *ww_plugin_get(const ww_host *host) {
+    HOST = host;
+    return &PLUGIN;
+}

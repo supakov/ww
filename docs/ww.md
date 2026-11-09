@@ -1,9 +1,8 @@
 # WW (W#): a window with tabs for programs that analyse and manage a system
 
-WW is the framework of programs with document tabs, wedit and wview among them: the crates
-`ww-base` and `ww` of this repository (supakov/ww), which the programs take as a git dependency
-of its branch `main`. A program
-on WW is one executable with its data folders next to it, a window with document tabs, a menu, a
+WW is the framework of programs with document tabs: the crates `ww-base` and `ww` of this
+repository, which the programs take as a git dependency of its branch `main`. A program on WW is
+one executable with its data folders next to it, a window with document tabs, a menu, a
 command bar of the active tab, a navigation row where a tab has one, a message bar, a status bar, a
 settings tab, themes with their fonts and an editor, translations, drafts of unsaved changes and the
 tabs of the last session. The program brings its documents, its acts and what it draws inside a tab;
@@ -14,7 +13,9 @@ the shell does the rest. This page is for the people who write such a program.
 | Crate | What it holds |
 |---|---|
 | `ww-base` | Pure Rust, no window: `jsonfile` (strict JSON documents with the trait `Document`, atomic saves), `paths` (a file inside the program folder kept relative to it), `clock`. |
-| `ww` | The window: `shell` (the trait `App`, `Shell`, `Window`, `ShellAct`, `ShellDoc`), `run` (`run::<A>`, `smoke_window::<A>`), `web` (`start::<A>` in a browser, wasm32 only), `doc` (the trait `Document`, `Search`, `Draft`, `Scrolled`), `settings` (`Settings<X>` with the fields of the program flattened in), `session` (drafts, the log), `store` (the files of the window: next to the executable natively, the storage of the page and downloads in a browser), `style` (the palette, the fonts, the painted buttons and cards), `themes` and `themeview` (theme files, the editor), `i18n` (`tr`, `trf`, the dictionaries), `tree` and `list` (the painted tree and list with the keyboard), `widgets` (a modal window, a side panel, a dialog in a folder), `mdview` (Markdown pages), `renderer` (OpenGL and DirectX 12), `commands` (the items of a command bar), `keys` (the keys of the window), `icons`, `dialogs`, `folders`. `ww` re-exports `eframe` (with `egui`) and `rfd`, so a program needs no other crate for its window. |
+| `ww` | The window: `shell` (the trait `App`, `Shell`, `Window`, `ShellAct`, `ShellDoc`), `run` (`run::<A>`, `smoke_window::<A>`), `web` (`start::<A>` in a browser, wasm32 only), `doc` (the trait `Document`, `Search`, `Draft`, `Scrolled`), `settings` (`Settings<X>` with the fields of the program flattened in), `session` (drafts, the log), `store` (the files of the window: next to the executable natively, the storage of the page and downloads in a browser), `style` (the palette, the fonts, the painted buttons and cards), `themes` and `themeview` (theme files, the editor), `i18n` (`tr`, `trf`, the dictionaries), `tree` and `list` (the painted tree and list with the keyboard), `widgets` (a modal window, a side panel, a dialog in a folder), `mdview` (Markdown pages), `renderer` (OpenGL and DirectX 12), `commands` (the items of a command bar), `keys` (the keys of the window), `icons`, `dialogs`, `folders`, `embedded` (the files embedded in the executable or a plugin,
+`embed!`, docs/embedded.md), `textdoc` (a text file in the editor of egui: the search, the
+cursor, the draft, the line ends kept, `read_text`). `ww` re-exports `eframe` (with `egui`) and `rfd`, so a program needs no other crate for its window. |
 
 A program depends on `ww` with `default-features = false` and chooses its renderers with the
 features `glow` (OpenGL) and `wgpu` (DirectX 12), both by default. Built for `wasm32-unknown-unknown`
@@ -63,7 +64,8 @@ frame). Its methods do what every program needs: `open_tab`, `open_file` (a file
 `remember_recent`, `ask` (a question before an act), `close_question` (Save, Don't save or Cancel
 before a tab with changes closes), `linked_file` (the file a link of the active page names,
 relative to the page), `about_lines` (the lines every About has), `open_settings`,
-`effective_language`, `apply_language`, `log`.
+`effective_language`, `apply_language`, `log`, `open_page` and `active_page` (a page of a set of
+embedded files, `ShellDoc::Page`).
 
 `Window<P>` holds the shell and the program apart, so a method of the program takes `&mut self`
 and `shell: &mut Shell<P>` without a double borrow. `Window::new(program, settings)` is what a
@@ -74,7 +76,8 @@ test builds; `window.apply(acts)` runs acts as a frame would; `window.shell.docs
 `OpenPath`, `OpenBytes` (a file by its name and bytes, from a browser), `Save`, `SaveAs`,
 `ForgetRecent`, `OpenSettings`, `OpenSection`, `EditTheme`,
 `OpenThemeFile`, `UseTheme`, `ToggleMessages`, `SearchCleared`, `Revealed`, `Follow`, `Message`,
-`ShowInFolder`, `OpenLink`, `OpenWeb`, `About`, `SaveAndClose`, `Exit`, `Ask`, `Answer`,
+`ShowInFolder`, `OpenLink`, `OpenEmbedded` (a file of a set of embedded files: a page in a tab of
+the window, `App::open_embedded`), `OpenWeb`, `About`, `SaveAndClose`, `Exit`, `Ask`, `Answer`,
 `AnswerAlt`. A question (`ww::Question`) has a title, a text, the yes and its act, and with
 `Question::or` a second answer beside it. The keys of the window (`ww::keys`): Ctrl+N,
 Ctrl+O, Ctrl+S, Ctrl+Shift+S, Ctrl+W, Ctrl+comma, Ctrl+F, Ctrl+Tab and Ctrl+Shift+Tab,
@@ -173,13 +176,16 @@ Every text of the interface is `tr("English")` or `trf("English {name}", &[("nam
 A dictionary is a JSON object of English keys and translated values with `_language` for the
 name of the language. The test of the translations of a program reads its own literals and the
 ones of `ww` (its sources at `ww::SOURCES`, the checkout of git) and fails when an embedded
-language lacks one; every program keeps its own
-files complete (wedit ships `lang/uk/ui.json` with every text of wedit and of WW).
+language lacks one; every program keeps its own files complete (the demo embeds
+`lang/uk/ui.json` and `lang/ru/ui.json` with every text of the demo, of W# and of wwrt). A
+program may take its languages from a set of embedded files (`Embedded::translations`).
 
-## 7. wedit, the example
+## 7. The demo, the example
 
-wedit, in the folder `wedit` of supakov/wview (under 800 lines), shows every part: `app.rs`
-(`Wedit`, `Doc { Text, Page, Shell }`, `Act { Shell, Find, FindNext, EditAsText }`, `Extra {}`,
-`impl ww::App`), `textdoc.rs` (a text file in the editor of egui: the search with its matches, the
-cursor, the draft, the line ends kept), `main.rs` (the command line, `ww::run`). Its archive is
-`wedit-<version>.zip` with the exe, its `README.md` and `lang/uk/ui.json`.
+`examples/ww-demo` shows every part once: `app.rs` (`Demo`, `Doc { Host, Note, Page, Widgets,
+Shell }`, `Act`, `Extra` with the settings of the plugins flattened in, `impl ww::App` and
+`impl wwrt::host::PluginApp`, the files it embeds), `widgets.rs` (the tree with a context menu on
+its rows, the list, the navigation row, the message bar, the painted widgets of the style),
+`bundle.rs` and `texts.rs` (two plugins the program makes itself), `main.rs` (the command line,
+`ww::run`) and `tests.rs` (the window built with `Window::new` and drawn with egui_kittest).
+`build-all.cmd` packs it with its plugins as `dist/ww-demo-<version>.zip`.

@@ -27,6 +27,7 @@ pub use ww::eframe::egui;
 pub const SOURCES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src");
 
 pub mod blocks;
+pub mod host;
 pub mod inner;
 pub mod input;
 pub mod menus;

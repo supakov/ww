@@ -7,13 +7,16 @@
 //! settings file (`settings`), the drafts and the log (`session`), the files of the window
 //! natively or in the storage of a browser (`store`), the file dialogs (`dialogs`), the folders
 //! next to the executable (`folders`), the search of a tab and the trait of a document (`doc`),
-//! a question over the window (`question`), the keys and the items of the command bar (`keys`,
-//! `commands`), the icons (`icons`), the start in a browser (`web`, wasm32 only).
+//! the files embedded in the executable or a plugin (`embedded`, `embed!`), a question over the
+//! window (`question`), the keys and the items of the command bar (`keys`, `commands`), the icons
+//! (`icons`), a text file in the editor of egui (`textdoc`), the start in a browser (`web`, wasm32
+//! only).
 
 pub mod coloricons;
 pub mod commands;
 pub mod dialogs;
 pub mod doc;
+pub mod embedded;
 pub mod folders;
 pub mod i18n;
 pub mod icons;
@@ -31,6 +34,7 @@ pub mod settings;
 pub mod shell;
 pub mod store;
 pub mod style;
+pub mod textdoc;
 pub mod themes;
 pub mod themeview;
 pub mod tree;
@@ -49,9 +53,10 @@ pub use ww_base::clock;
 
 pub use commands::{Command, Item, MenuButton};
 pub use doc::{Document, Draft, DraftState, Scrolled, Search, matches_words, remember_search};
+pub use embedded::Embedded;
 pub use question::Question;
 #[cfg(not(target_arch = "wasm32"))]
 pub use run::{run, smoke_window};
 pub use settings::{Extra, PageWidth, Settings, ThemeChoice, WindowPlace};
-pub use shell::{App, Job, Messages, Nav, SettingsDoc, Shell, ShellAct, ShellDoc, Window};
+pub use shell::{App, Job, Messages, Nav, PageDoc, SettingsDoc, Shell, ShellAct, ShellDoc, Window};
 pub use themeview::ThemeDoc;

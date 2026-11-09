@@ -13,3 +13,5 @@
 *.gif binary
 *.woff2 binary
 *.zip binary
+*.wwbundle binary
+*.bin binary

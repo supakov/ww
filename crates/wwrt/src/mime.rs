@@ -1,13 +1,13 @@
-//! MIME types: the type of some bytes by their first ones (`sniff`), the spellings of one type
-//! (`canonical`), and the types a textual one falls back to when no plugin names it
-//! (`fallbacks`). A plugin names the types of its formats (`plugin::Format::mimes`); the host finds
-//! the plugin of some bytes inside another file by them (`plugin::Host::open_inside`).
+//! MIME types: the spellings of one type (`canonical`), the types a textual one falls back to when
+//! no plugin names it (`fallbacks`), and the least the host knows of the type of some bytes by
+//! their first ones (`sniff`: a text, in UTF-8 or UTF-16). A plugin names the types of its formats
+//! (`plugin::Format::mimes`) and finds its own in the first bytes (`plugin::Plugin::sniff`); the
+//! host asks every plugin before it falls back to a text (`plugin::Plugins::sniff`), and finds the
+//! plugin of some bytes by their type (`plugin::Host::open_inside`).
 
 /// How many first bytes `sniff` looks at, at most.
 pub const SNIFFED: usize = 512;
 
-/// The type of a portable executable (an exe, a DLL).
-pub const PE: &str = "application/vnd.microsoft.portable-executable";
 /// Any bytes: the type of the plugin a file no other plugin opens falls back to.
 pub const OCTET: &str = "application/octet-stream";
 
@@ -22,8 +22,14 @@ const ALIASES: [(&str, &str); 11] = [
     ("image/x-ms-bmp", "image/bmp"),
     ("image/vnd-ms.dds", "image/vnd.ms-dds"),
     ("text/xml", "application/xml"),
-    ("application/x-msdownload", PE),
-    ("application/x-dosexec", PE),
+    (
+        "application/x-msdownload",
+        "application/vnd.microsoft.portable-executable",
+    ),
+    (
+        "application/x-dosexec",
+        "application/vnd.microsoft.portable-executable",
+    ),
 ];
 
 /// The type without its parameters, in lower case: `text/plain; charset=utf-16le` is
@@ -85,118 +91,74 @@ pub fn fallbacks(mime: &str) -> Vec<&'static str> {
     out
 }
 
-/// The type of common files by their first bytes (`SNIFFED` of them, or all a shorter part
-/// has): PNG, JPEG, GIF, BMP, ICO, TIFF, WebP, QOI, farbfeld, Radiance HDR, Netpbm, a portable
-/// executable, ZIP, PDF, and texts of
-/// UTF-8 or UTF-16 (with or without a mark) as XML, HTML, JSON or plain text. A text of UTF-16 without
-/// its mark says so in its `charset`.
+/// The type of some bytes the host knows by itself: a text of UTF-8 or UTF-16 (with or without
+/// a mark) is `text/plain`, with the `charset` of UTF-16 without its mark; any other bytes have
+/// none here, and the plugins name their types (`plugin::Plugins::sniff`).
 pub fn sniff(bytes: &[u8]) -> Option<&'static str> {
-    let bytes = &bytes[..bytes.len().min(SNIFFED)];
-    let starts = |magic: &[u8]| bytes.starts_with(magic);
-    let u16_at = |at: usize| {
-        bytes
-            .get(at..at + 2)
-            .map(|b| u16::from_le_bytes([b[0], b[1]]))
-    };
-    let u32_at = |at: usize| {
-        bytes
-            .get(at..at + 4)
-            .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
-    };
-    if starts(b"\x89PNG\r\n\x1a\n") {
-        return Some("image/png");
-    }
-    if starts(b"\xFF\xD8\xFF") {
-        return Some("image/jpeg");
-    }
-    if starts(b"GIF87a") || starts(b"GIF89a") {
-        return Some("image/gif");
-    }
-    if starts(b"BM") && u32_at(6) == Some(0) && u32_at(14).is_some_and(|s| s >= 12) {
-        return Some("image/bmp");
-    }
-    if starts(&[0, 0, 1, 0]) && u16_at(4).is_some_and(|n| n > 0) && bytes.get(9) == Some(&0) {
-        return Some("image/x-icon");
-    }
-    if starts(b"II*\0") || starts(b"MM\0*") {
-        return Some("image/tiff");
-    }
-    if starts(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") {
-        return Some("image/webp");
-    }
-    if starts(b"MZ")
-        && let Some(header) = u32_at(0x3C)
-    {
-        let header = header as usize;
-        match bytes.get(header..header + 4) {
-            Some(b"PE\0\0") => return Some(PE),
-            // The header of PE beyond the bytes looked at: the stub of MS-DOS is enough.
-            None if header >= bytes.len() && header < 1 << 20 => return Some(PE),
-            _ => {}
-        }
-    }
-    if starts(b"qoif") {
-        return Some("image/qoi");
-    }
-    if starts(b"farbfeld") {
-        return Some("image/x-farbfeld");
-    }
-    if starts(b"#?RADIANCE") || starts(b"#?RGBE") {
-        return Some("image/vnd.radiance");
-    }
-    // Netpbm: P1 to P7 and white space.
-    if let [b'P', kind @ b'1'..=b'7', next, ..] = bytes
-        && next.is_ascii_whitespace()
-    {
-        let _ = kind;
-        return Some("image/x-portable-anymap");
-    }
-    if starts(b"PK\x03\x04") || starts(b"PK\x05\x06") {
-        return Some("application/zip");
-    }
-    if starts(b"%PDF-") {
-        return Some("application/pdf");
-    }
-    text(bytes)
+    text(bytes)?;
+    Some(match charset(bytes) {
+        Some("utf-16le") => "text/plain; charset=utf-16le",
+        Some(_) => "text/plain; charset=utf-16be",
+        None => "text/plain",
+    })
 }
 
-/// The type of a text: XML, HTML or plain, by its start.
-fn text(bytes: &[u8]) -> Option<&'static str> {
-    if let Some(rest) = bytes.strip_prefix(b"\xEF\xBB\xBF") {
-        return Some(kind_of(&utf8(rest)?));
+/// The type with the `charset` of the bytes when they are a text of UTF-16 without its mark: a
+/// textual type a plugin found in them (`application/json` of UTF-16 is `application/json;
+/// charset=utf-16le`); any other type as it is.
+pub fn with_charset(mime: &str, bytes: &[u8]) -> String {
+    let textual = canonical(mime) == "text/plain" || fallbacks(mime).contains(&"text/plain");
+    match charset(bytes) {
+        Some(set) if textual && parameter(mime, "charset").is_none() => {
+            format!("{mime}; charset={set}")
+        }
+        _ => mime.to_owned(),
     }
-    if let Some(rest) = bytes.strip_prefix(b"\xFF\xFE") {
-        return Some(kind_of(&utf16(rest, false)?));
+}
+
+/// The charset of the first bytes when they are a text of UTF-16 without its mark: a zero byte
+/// in every pair, after the character in little endian.
+pub fn charset(bytes: &[u8]) -> Option<&'static str> {
+    let bytes = &bytes[..bytes.len().min(SNIFFED)];
+    let marked = bytes.starts_with(b"\xFF\xFE") || bytes.starts_with(b"\xFE\xFF");
+    if marked || utf8(bytes).is_some() {
+        return None;
     }
-    if let Some(rest) = bytes.strip_prefix(b"\xFE\xFF") {
-        return Some(kind_of(&utf16(rest, true)?));
-    }
-    if let Some(text) = utf8(bytes) {
-        return Some(kind_of(&text));
-    }
-    // UTF-16 without its mark: a zero byte in every pair, after the character in little endian.
     let (pairs, _) = bytes.as_chunks::<2>();
-    if pairs.len() >= 2 {
-        let little = pairs.iter().all(|[_, high]| *high == 0);
-        let big = pairs.iter().all(|[high, _]| *high == 0);
-        if little && let Some(text) = utf16(bytes, false) {
-            return Some(match kind_of(&text) {
-                "application/xml" => "application/xml; charset=utf-16le",
-                "text/html" => "text/html; charset=utf-16le",
-                "application/json" => "application/json; charset=utf-16le",
-                _ => "text/plain; charset=utf-16le",
-            });
-        }
-        if big && let Some(text) = utf16(bytes, true) {
-            return Some(match kind_of(&text) {
-                "application/xml" => "application/xml; charset=utf-16be",
-                "text/html" => "text/html; charset=utf-16be",
-                "application/json" => "application/json; charset=utf-16be",
-                _ => "text/plain; charset=utf-16be",
-            });
-        }
+    if pairs.len() < 2 {
+        return None;
+    }
+    if pairs.iter().all(|[_, high]| *high == 0) && utf16(bytes, false).is_some() {
+        return Some("utf-16le");
+    }
+    if pairs.iter().all(|[high, _]| *high == 0) && utf16(bytes, true).is_some() {
+        return Some("utf-16be");
     }
     None
+}
+
+/// The text the first bytes hold (`SNIFFED` of them at most), in UTF-8 or UTF-16 with or
+/// without a mark, when every character is readable: the start a plugin looks at for the type
+/// of a text (an object of JSON, a declaration of XML).
+pub fn text(bytes: &[u8]) -> Option<String> {
+    let bytes = &bytes[..bytes.len().min(SNIFFED)];
+    if let Some(rest) = bytes.strip_prefix(b"\xEF\xBB\xBF") {
+        return utf8(rest);
+    }
+    if let Some(rest) = bytes.strip_prefix(b"\xFF\xFE") {
+        return utf16(rest, false);
+    }
+    if let Some(rest) = bytes.strip_prefix(b"\xFE\xFF") {
+        return utf16(rest, true);
+    }
+    if let Some(text) = utf8(bytes) {
+        return Some(text);
+    }
+    match charset(bytes) {
+        Some("utf-16le") => utf16(bytes, false),
+        Some(_) => utf16(bytes, true),
+        None => None,
+    }
 }
 
 /// Whether a character may be in a text: no control character but the white space ones.
@@ -244,88 +206,14 @@ fn utf16(bytes: &[u8], big: bool) -> Option<String> {
     (!text.is_empty()).then_some(text)
 }
 
-/// XML, HTML, JSON or plain text, by the start of a text: JSON an object, or an array whose
-/// first item is a value of JSON (a `[section]` of an INI or TOML file is a text).
-fn kind_of(text: &str) -> &'static str {
-    let start = text.trim_start().to_ascii_lowercase();
-    let json = start.starts_with('{')
-        || start.strip_prefix('[').is_some_and(|rest| {
-            let rest = rest.trim_start();
-            rest.is_empty()
-                || rest.starts_with(|c: char| "{[\"]-0123456789".contains(c))
-                || ["true", "false", "null"]
-                    .iter()
-                    .any(|w| rest.starts_with(w))
-        });
-    if start.starts_with("<?xml") {
-        "application/xml"
-    } else if start.starts_with("<!doctype html") || start.starts_with("<html") {
-        "text/html"
-    } else if json {
-        "application/json"
-    } else {
-        "text/plain"
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn the_first_bytes_name_the_type() {
-        assert_eq!(sniff(b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR"), Some("image/png"));
-        assert_eq!(sniff(b"\xFF\xD8\xFF\xE0\0\x10JFIF"), Some("image/jpeg"));
-        assert_eq!(sniff(b"GIF89a\x01\0\x01\0"), Some("image/gif"));
-        let mut bmp = b"BM".to_vec();
-        bmp.extend(70u32.to_le_bytes());
-        bmp.extend([0; 4]);
-        bmp.extend(54u32.to_le_bytes());
-        bmp.extend(40u32.to_le_bytes());
-        assert_eq!(sniff(&bmp), Some("image/bmp"));
-        assert_eq!(
-            sniff(&[0, 0, 1, 0, 1, 0, 16, 16, 0, 0]),
-            Some("image/x-icon")
-        );
-        assert_eq!(sniff(b"II*\0\x08\0\0\0"), Some("image/tiff"));
-        assert_eq!(sniff(b"RIFF\0\0\0\0WEBPVP8 "), Some("image/webp"));
-        assert_eq!(sniff(b"PK\x03\x04\x14\0"), Some("application/zip"));
-        assert_eq!(sniff(b"qoif\0\0\0\x05"), Some("image/qoi"));
-        assert_eq!(sniff(b"farbfeld\0\0"), Some("image/x-farbfeld"));
-        assert_eq!(sniff(b"#?RADIANCE\nFORMAT"), Some("image/vnd.radiance"));
-        assert_eq!(sniff(b"P6\n5 3\n255\n"), Some("image/x-portable-anymap"));
-        assert_eq!(
-            sniff(b"Pa text"),
-            Some("text/plain"),
-            "P and a letter is a text"
-        );
-        assert_eq!(sniff(b"%PDF-1.7\n"), Some("application/pdf"));
-        let mut exe = vec![0u8; 0x48];
-        exe[..2].copy_from_slice(b"MZ");
-        exe[0x3C..0x40].copy_from_slice(&0x40u32.to_le_bytes());
-        exe[0x40..0x44].copy_from_slice(b"PE\0\0");
-        assert_eq!(sniff(&exe), Some(PE));
-        exe[0x40] = b'X';
-        assert_eq!(sniff(&exe), None, "MZ with another header is no program");
-        assert_eq!(sniff(&[]), None);
-        assert_eq!(sniff(&[0, 1, 2, 3, 0xFE, 0x80]), None);
-    }
-
-    #[test]
-    fn a_text_is_xml_html_or_plain_in_any_encoding() {
-        assert_eq!(
-            sniff(b"<?xml version=\"1.0\"?>\r\n<assembly/>"),
-            Some("application/xml")
-        );
-        assert_eq!(
-            sniff(b"\xEF\xBB\xBF<?xml version='1.0'?>"),
-            Some("application/xml")
-        );
-        assert_eq!(sniff(b"  <!DOCTYPE html>\n<html>"), Some("text/html"));
-        assert_eq!(
-            sniff("x = 1\nname = \u{0444}\n".as_bytes()),
-            Some("text/plain")
-        );
+    fn the_host_knows_a_text_in_any_encoding() {
+        assert_eq!(sniff(b"x = 1\nname = a\n"), Some("text/plain"));
+        assert_eq!(sniff("\u{0444}\u{0444}".as_bytes()), Some("text/plain"));
         // A character of UTF-8 cut at the end of the bytes looked at.
         assert_eq!(
             sniff(&"\u{0444}\u{0444}".as_bytes()[..3]),
@@ -334,17 +222,36 @@ mod tests {
         let wide: Vec<u8> = "<html>".encode_utf16().flat_map(u16::to_le_bytes).collect();
         let mut marked = vec![0xFF, 0xFE];
         marked.extend(&wide);
-        assert_eq!(sniff(&marked), Some("text/html"));
-        assert_eq!(sniff(&wide), Some("text/html; charset=utf-16le"));
+        assert_eq!(
+            sniff(&marked),
+            Some("text/plain"),
+            "a mark needs no charset"
+        );
+        assert_eq!(text(&marked).as_deref(), Some("<html>"));
+        assert_eq!(sniff(&wide), Some("text/plain; charset=utf-16le"));
+        assert_eq!(text(&wide).as_deref(), Some("<html>"));
         let plain: Vec<u8> = "name".encode_utf16().flat_map(u16::to_be_bytes).collect();
         assert_eq!(sniff(&plain), Some("text/plain; charset=utf-16be"));
         assert_eq!(sniff(b"one\0two"), None, "a zero byte is no text of UTF-8");
-        assert_eq!(sniff(b"  {\"a\": 1}"), Some("application/json"));
-        assert_eq!(sniff(b"[1, 2]"), Some("application/json"));
         assert_eq!(
-            sniff(b"[section]\nkey = 1"),
-            Some("text/plain"),
-            "an INI or TOML"
+            sniff(b"\x89PNG\r\n\x1a\n"),
+            None,
+            "the plugins know the rest"
+        );
+        assert_eq!(sniff(&[]), None);
+        assert_eq!(
+            text(b"\xEF\xBB\xBF{\"a\": 1}").as_deref(),
+            Some("{\"a\": 1}")
+        );
+        assert_eq!(
+            with_charset("application/json", &wide),
+            "application/json; charset=utf-16le"
+        );
+        assert_eq!(with_charset("application/json", b"{}"), "application/json");
+        assert_eq!(with_charset("image/png", &wide), "image/png");
+        assert_eq!(
+            with_charset("text/plain; charset=utf-16le", &wide),
+            "text/plain; charset=utf-16le"
         );
     }
 
@@ -352,6 +259,10 @@ mod tests {
     fn the_spellings_of_a_type_and_its_fallbacks() {
         assert!(same("image/ICO", "image/vnd.microsoft.icon"));
         assert!(same("text/xml; charset=utf-8", "application/xml"));
+        assert!(same(
+            "application/x-msdownload",
+            "application/vnd.microsoft.portable-executable"
+        ));
         assert!(!same("image/png", "image/jpeg"));
         assert_eq!(base("Text/Plain ; charset=UTF-16LE"), "text/plain");
         assert_eq!(

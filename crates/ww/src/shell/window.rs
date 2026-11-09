@@ -184,7 +184,21 @@ impl<A: App> Window<A> {
                     shell.status = trf("The folder was not opened: {e}", &[("e", &e)]);
                 }
             }
+            ShellAct::OpenEmbedded(files, link) => self.app.open_embedded(shell, files, &link),
             ShellAct::OpenLink(link) => {
+                // A link of a page of a set to another file of the set.
+                if !is_web(&link)
+                    && let Some((files, page)) = shell.active_page()
+                    && let Some(target) = crate::embedded::join(&page, &link)
+                    && files.get(&target).is_some()
+                {
+                    let link = match link.split_once('#') {
+                        Some((_, anchor)) => format!("{target}#{anchor}"),
+                        None => target,
+                    };
+                    self.app.open_embedded(shell, files, &link);
+                    return;
+                }
                 if opens_inside(&link) {
                     self.app.open_link(shell, &link);
                 } else {
@@ -240,7 +254,7 @@ impl<A: App> Window<A> {
     fn save(&mut self, ask: bool) {
         match self.shell.active_doc().and_then(Document::shell_doc) {
             Some(ShellDoc::Theme(_)) => self.shell.save_theme(ask),
-            Some(ShellDoc::Settings(_)) => {}
+            Some(ShellDoc::Settings(_) | ShellDoc::Page(_)) => {}
             None => self.app.save(&mut self.shell, ask),
         }
         // A document saved has no draft any more.
@@ -377,6 +391,7 @@ impl<A: App> Window<A> {
         match self.shell.active_doc().and_then(Document::shell_doc) {
             Some(ShellDoc::Settings(_)) => self.settings_view(ui, acts),
             Some(ShellDoc::Theme(_)) => self.shell.theme_view(ui, acts),
+            Some(ShellDoc::Page(_)) => self.page_view(ui),
             None if self.shell.docs.is_empty() => {
                 egui::CentralPanel::default().show(ui, |ui| {
                     let text = "No document is open. Use Menu, New or {keys}.";

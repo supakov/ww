@@ -8,3 +8,5 @@ Cargo.lock.bak
 *.swp
 Thumbs.db
 .DS_Store
+# The build folders of the workspaces of their own (examples/ww-grey).
+target/

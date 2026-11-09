@@ -1,7 +1,7 @@
 # The facts a change of W# must respect
 
-Facts learned while building W# and its programs: the ones of the window of W#. The facts of
-wview and its plugins are in `docs/details.md` of supakov/wview.
+Facts learned while building W# and its programs: the ones of the window of W#, of its embedded
+files and of the system of its plugins.
 
 ## The window and W#
 
@@ -78,7 +78,7 @@ wview and its plugins are in `docs/details.md` of supakov/wview.
   writes back to it (`Shell::settings_path`), so two copies of an executable with different names keep
   their own settings and a plain `settings.json` goes on. `Settings::wrap_lines` folds the lines of
   a text or a page to the width of the view (the setting Wrap lines of General); off, the view scrolls
-  sideways (a `layouter` of infinite width in wedit, an infinite width for the page). A page always
+  sideways (a `layouter` of infinite width in `ww::textdoc`, an infinite width for the page). A page always
   scrolls sideways for a table or a block of code wider than the view, and its code takes the colour
   `code_bg` of the theme. A program adds colours to the themes with `style::install_colors`
   (`ExtraColor`: name, label, light, dark); a theme file overrides them by name, the theme editor lists
@@ -121,3 +121,34 @@ wview and its plugins are in `docs/details.md` of supakov/wview.
   searches, the copy menus of texts) have icons too. The tab row (`shell/tabs.rs`) is a scroll area
   without a bar when the tabs are wider than the window: the wheel scrolls it sideways, a new active
   tab or count scrolls the active one into view, and a button after the new tab lists every tab.
+
+- Embedded files (`ww::embedded`, docs/embedded.md): a set is `&'static [File]` and is one set by
+  the address of its slice (`Embedded::same`); a page of a set is `ShellDoc::Page`, opened once
+  by its set and its path in English, its text read in the language of the interface at the
+  open. A link of such a page is taken from the folder of its path in the set before any other
+  handling of a link (`window.rs`, `ShellAct::OpenLink`); one of no file of the set goes on as a
+  link of any page. `embed!` reads its files relative to `CARGO_MANIFEST_DIR` of the crate that
+  names it.
+
+## The plugins
+
+- The interface stays version 1 (`wwrt::plugin::API`, `WW_API_VERSION` of `ww.h`) until the
+  first release: its structures may change until then, and every plugin of the repository and of
+  its programs is built again with them.
+- The type of some bytes: the host knows texts alone (`mime::sniff`); every other type is a
+  plugin's (`Plugin::sniff`, asked in the order of the plugins, the first answer wins). A plugin of
+  the stable interface gives one of the types of its formats, matched without case to the text
+  the host keeps, so its answer lives for the run.
+- The cache of the blocks (`wwrt::blocks`) is one for the process, in `wwrt.dll`: a block is keyed
+  by its file, the size of a block it was read with and its index, so a new size of a block
+  empties the cache and a block read with the old size is not kept. A file that closes (its last
+  `BlockFile` dropped) takes its blocks along.
+- A source of the stable interface (`ww_source`) is a box of the host whose first field is the
+  structure of the header and whose `self` is the box; a source of `open_bytes` belongs to its
+  view and is freed after `close`, `close_source` of the plugin leaves it.
+- A plugin of stable Rust (`examples/ww-grey`) is a workspace of its own, excluded from the one of
+  the repository, and is built with `RUSTFLAGS` set (`build-all.cmd`): the `.cargo/config.toml` of
+  the repository links std dynamically for the native family, and the rustflags of a parent config
+  are joined to the ones of a child, while `RUSTFLAGS` stands for all of them.
+- A heredoc of Git Bash swallows doubled backslashes: text with backslashes is written with the
+  file tools or a script file.

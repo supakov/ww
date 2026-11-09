@@ -1,0 +1,25 @@
+# ww-grey: a plugin of the stable interface of W# (ww.h) in Rust of any toolchain, with the crate
+# ww-stable. A workspace of its own: it is built without the flags of the native plugins of the
+# repository (std linked in, no runtime of W#), as a plugin of others is.
+[package]
+name = "ww-grey"
+description = "Any bytes as a grey picture, read in blocks through the cache of the host: an example of the stable interface in Rust"
+version = "1.0.0"
+edition = "2021"
+rust-version = "1.77"
+license = "MIT"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+ww-stable = { path = "../../stable/rust" }
+
+[workspace]
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+panic = "unwind"

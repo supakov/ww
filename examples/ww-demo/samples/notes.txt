@@ -1,0 +1,5 @@
+Notes of the demo
+
+A text file of the set the demo embeds. Opened from a page of the guide, it shows as a page of the
+window; a file of the disk with the extension .txt opens as a note instead, which the editor of W#
+changes and saves.

@@ -7,7 +7,12 @@
 //! A view offers some of its bytes to the other plugins (`View::offer`) and has a context of
 //! commands (`View::context`), both in the menus `crate::menus` draws: the context menu of the
 //! view, its copy in the menu of the window, and Open with, which opens the bytes or a file
-//! with the plugin of any type (`Plugin::open_as`).
+//! with the plugin of any type (`Plugin::open_as`). Bytes travel as a `BlockFile`: a part of a
+//! file read through the cache of the program, or bytes in memory.
+//!
+//! A plugin finds the types of its formats in the first bytes of a file (`Plugin::sniff`), so a
+//! file of another name opens by what it holds, and it may embed files of its own
+//! (`Plugin::files`: its guide, its translations, samples), which the window opens in tabs.
 //!
 //! A plugin is a `cdylib` crate that depends on wwrt alone, implements `Plugin` and `View` and
 //! names its plugin with `wwrt::plugin!`. The host loads every DLL of the folder
@@ -21,14 +26,17 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 use ww::eframe::egui;
+use ww::embedded::Embedded;
 use ww::{PageWidth, Search};
 
+use crate::blocks::BlockFile;
 use crate::mime;
 use crate::trust::{self, Origin, Trust};
 
-/// The version of this interface: the traits and the types of this module. A change of them
-/// that an older plugin cannot follow takes the next number (`ABI` names it too).
-pub const API: u32 = 3;
+/// The version of this interface: the traits and the types of this module (`ABI` names it too).
+/// It stays 1 until the first release of W#; a release that changes the interface takes the next
+/// number.
+pub const API: u32 = 1;
 
 /// The build of this runtime: its version, the interface, the compiler, the target and the
 /// profile (`build.rs`), nul-terminated. A plugin carries the one it was built against (`plugin!`),
@@ -36,7 +44,7 @@ pub const API: u32 = 3;
 pub const ABI: &str = concat!(
     "wwrt ",
     env!("CARGO_PKG_VERSION"),
-    "; interface 3; ",
+    "; interface 1; ",
     env!("WWRT_BUILD"),
     "\0"
 );
@@ -84,7 +92,7 @@ pub enum Request {
     OpenBytes {
         name: String,
         mime: String,
-        bytes: Vec<u8>,
+        bytes: BlockFile,
     },
     /// Bytes in a tab of their own under a name, by a plugin chosen (its index among the plugins
     /// of the window) as a MIME type of its formats: a choice of Open with (`crate::menus`).
@@ -92,8 +100,12 @@ pub enum Request {
         name: String,
         plugin: usize,
         mime: String,
-        bytes: Vec<u8>,
+        bytes: BlockFile,
     },
+    /// A file of a set of embedded files (the ones of a plugin, `Plugin::files`) by its path in
+    /// the set, with the heading after `#`: a page in a tab of the window, any other file by the
+    /// plugin of its type.
+    OpenEmbedded(Embedded, String),
 }
 
 /// The bytes a view offers to the other plugins (`View::offer`): their name, for the tab they
@@ -173,17 +185,31 @@ pub trait Plugin: Send + Sync {
     fn opens_bytes(&self) -> bool {
         false
     }
-    /// A view of some bytes in memory under a name (a part of another file shown inside its
-    /// view, `Host::open_inside`), of a MIME type of the formats of the plugin with its
-    /// parameters (`text/plain; charset=utf-16le`); a plugin of files alone keeps this answer.
+    /// A view of some bytes under a name (a part of another file shown inside its view,
+    /// `Host::open_inside`, or offered to Open with), of a MIME type of the formats of the plugin
+    /// with its parameters (`text/plain; charset=utf-16le`); the view reads what it shows
+    /// through the `BlockFile`, or all of it (`BlockFile::to_vec`). A plugin of files alone keeps
+    /// this answer.
     fn open_bytes(
         &self,
         _name: &str,
         _mime: &str,
-        _bytes: Vec<u8>,
+        _bytes: BlockFile,
         _settings: &Value,
     ) -> Result<Box<dyn View>, String> {
         Err(NO_BYTES.to_owned())
+    }
+    /// The MIME type of a format of the plugin the first bytes of a file show (`mime::SNIFFED`
+    /// of them at most; `mime::text` gives them as a text), or none: the host asks every plugin
+    /// in turn before it takes a text as `text/plain` (`Plugins::sniff`).
+    fn sniff(&self, _head: &[u8]) -> Option<&'static str> {
+        None
+    }
+    /// The files the plugin embeds (`ww::embed!`): its pages, which the page of the plugins
+    /// links, samples, and its translations as `lang/<code>/ui.json`, added to the window at the
+    /// load as the ones of `translations` are.
+    fn files(&self) -> Embedded {
+        Embedded::EMPTY
     }
     /// Items of the plugin in the menu of the window, in a submenu of its name.
     fn menu(&self) -> Vec<Tool> {
@@ -231,8 +257,9 @@ pub trait View {
     fn offer(&self) -> Option<Offer> {
         None
     }
-    /// The bytes of `offer`, or why they cannot be had.
-    fn offered(&mut self) -> Result<Vec<u8>, String> {
+    /// The bytes of `offer` (a part of the file of the view, `BlockFile::slice`, or bytes in
+    /// memory), or why they cannot be had.
+    fn offered(&mut self) -> Result<BlockFile, String> {
         Err(NO_OFFER.to_owned())
     }
     /// Items of the view in the menu of the window while its tab is in front.
@@ -416,9 +443,13 @@ impl Plugins {
     }
 
     /// A plugin made by the program itself or a test, next to the ones of DLLs; its
-    /// translations join the window.
+    /// translations (`Plugin::translations` and the ones of its files) join the window.
     pub fn add(&mut self, file: PathBuf, plugin: Box<dyn Plugin>) {
         ww::i18n::add(plugin.translations());
+        let own = plugin.files().translations();
+        if !own.is_empty() {
+            ww::i18n::add(Box::leak(own.into_boxed_slice()));
+        }
         let id = file
             .file_stem()
             .map(|s| s.to_string_lossy().into_owned())
@@ -441,23 +472,41 @@ impl Plugins {
         self.all_for_file(path).first().copied()
     }
 
+    /// The MIME type of some bytes by their first ones: the first plugin that finds one of its
+    /// types in them (`Plugin::sniff`, with the `charset` of a text of UTF-16 without its mark),
+    /// else a text (`mime::sniff`), else none.
+    pub fn sniff(&self, head: &[u8]) -> Option<String> {
+        let head = &head[..head.len().min(mime::SNIFFED)];
+        self.loaded
+            .iter()
+            .find_map(|l| l.plugin.sniff(head))
+            .map(|m| mime::with_charset(m, head))
+            .or_else(|| mime::sniff(head).map(str::to_owned))
+    }
+
+    /// The MIME type of a file by its first bytes (`sniff`); none when it does not read.
+    pub fn sniff_file(&self, path: &Path) -> Option<String> {
+        let file = std::fs::File::open(path).ok()?;
+        let mut first = Vec::new();
+        let mut part = std::io::Read::take(file, mime::SNIFFED as u64);
+        std::io::Read::read_to_end(&mut part, &mut first).ok()?;
+        self.sniff(&first)
+    }
+
     /// The plugins of a file in the order a host tries them: the ones of its extension, then
-    /// the ones of the MIME type of its first bytes (`mime::sniff`), so that a file of another
+    /// the ones of the MIME type of its first bytes (`sniff`), so that a file of another
     /// extension or of none opens by what it holds, then the ones of any bytes
     /// (`mime::OCTET`), which a file no other plugin opens falls back to.
     pub fn all_for_file(&self, path: &Path) -> Vec<usize> {
         let mut out: Vec<usize> = (0..self.loaded.len())
             .filter(|i| self.loaded[*i].opens(path))
             .collect();
-        let mut first = Vec::new();
-        if let Ok(file) = std::fs::File::open(path) {
-            let mut part = std::io::Read::take(file, mime::SNIFFED as u64);
-            let _ = std::io::Read::read_to_end(&mut part, &mut first);
-        } else {
+        if !path.is_file() {
             return out;
         }
-        let sniffed = mime::sniff(&first)
-            .map(|m| self.for_mime(m))
+        let sniffed = self
+            .sniff_file(path)
+            .map(|m| self.for_mime(&m))
             .unwrap_or_default();
         for i in sniffed.into_iter().chain(self.for_mime(mime::OCTET)) {
             if !out.contains(&i) {
@@ -489,23 +538,20 @@ impl Plugins {
         &self,
         name: &str,
         mime: &str,
-        bytes: Vec<u8>,
+        bytes: BlockFile,
         settings: &dyn Fn(&str) -> Value,
     ) -> Result<(usize, Box<dyn View>), String> {
         let found = self.for_mime(mime);
-        let Some(&last) = found.last() else {
+        if found.is_empty() {
             return Err(format!("no plugin opens {}", mime::base(mime)));
-        };
+        }
         let mut why = Vec::new();
-        let mut bytes = Some(bytes);
         for &i in &found {
             let l = &self.loaded[i];
-            let these = if i == last {
-                bytes.take().unwrap_or_default()
-            } else {
-                bytes.clone().unwrap_or_default()
-            };
-            match l.plugin.open_bytes(name, mime, these, &settings(&l.id)) {
+            match l
+                .plugin
+                .open_bytes(name, mime, bytes.clone(), &settings(&l.id))
+            {
                 Ok(view) => return Ok((i, view)),
                 Err(e) => why.push(format!("{}: {e}", l.plugin.name())),
             }
@@ -535,18 +581,21 @@ fn load(path: &Path) -> Result<Box<dyn Plugin>, String> {
             text
         }
     })?;
-    // A plugin of the stable interface (wview.h) exports `wv_plugin_get` and no `ww_plugin`.
-    // SAFETY: `wv_plugin_get` is declared by wview.h with this signature; the table it gives is
-    // the plugin's static data, which lives while the DLL does, and the DLL is never unloaded.
+    // A plugin of the stable interface (ww.h) exports `ww_plugin_get` and no `ww_plugin`.
+    // SAFETY: `ww_plugin_get` is declared by ww.h with this signature; the host table it takes is
+    // the static data of this runtime, and the table it gives is the plugin's static data, which
+    // lives while the DLL does, and the DLL is never unloaded.
     let stable = unsafe {
+        type Get =
+            unsafe extern "C" fn(*const crate::stable::WwHost) -> *const crate::stable::WwPlugin;
         library
-            .get::<unsafe extern "C" fn() -> *const crate::stable::WvPlugin>(b"wv_plugin_get\0")
+            .get::<Get>(b"ww_plugin_get\0")
             .ok()
-            .map(|get| get())
+            .map(|get| get(crate::stable::host()))
     };
     if let Some(table) = stable {
         if table.is_null() {
-            return Err("wv_plugin_get gave no table".to_owned());
+            return Err("ww_plugin_get gave no table".to_owned());
         }
         // SAFETY: see above; the table is checked by `wrap` before it is used.
         let plugin = unsafe { crate::stable::wrap(&*table) }?;
@@ -645,6 +694,12 @@ mod tests {
         fn open(&self, _: &Path, _: &Value) -> Result<Box<dyn View>, String> {
             Err(String::new())
         }
+        /// The plugin of XML of the tests finds a declaration of XML.
+        fn sniff(&self, head: &[u8]) -> Option<&'static str> {
+            let text = mime::text(head)?;
+            let xml = self.0[0].name == "XML" && text.trim_start().starts_with("<?xml");
+            xml.then_some("text/xml")
+        }
     }
 
     static TEXTS: [Format; 1] = [Format {
@@ -691,8 +746,8 @@ mod tests {
         assert_eq!(plugins.for_mime("image/svg+xml"), [1, 0]);
         assert_eq!(plugins.for_mime("text/html"), [0]);
         assert!(plugins.for_mime("image/png").is_empty());
-        let Err(why) = plugins.open_bytes("a.xml", "text/xml", b"<a/>".to_vec(), &|_| Value::Null)
-        else {
+        let bytes = BlockFile::from_bytes(b"<a/>".to_vec());
+        let Err(why) = plugins.open_bytes("a.xml", "text/xml", bytes, &|_| Value::Null) else {
             panic!("neither plugin opens bytes");
         };
         assert_eq!(why, format!("test: {NO_BYTES}; test: {NO_BYTES}"));
@@ -727,6 +782,17 @@ mod tests {
         assert_eq!(plugins.for_file(&file("blob", &[0, 1, 2, 0xFF])), Some(2));
         assert_eq!(plugins.all_for_file(&file("b.xml", b"<a/>")), [1, 0, 2]);
         assert_eq!(plugins.all_for_file(&file("notes", b"plain")), [0, 2]);
+        // The type of the first bytes: the plugins first, then a text, with its charset.
+        let wide: Vec<u8> = "<?xml version='1.0'?>"
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        assert_eq!(
+            plugins.sniff(&wide).as_deref(),
+            Some("text/xml; charset=utf-16le")
+        );
+        assert_eq!(plugins.sniff(b"plain").as_deref(), Some("text/plain"));
+        assert_eq!(plugins.sniff(&[0, 1, 2, 0xFF]), None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
