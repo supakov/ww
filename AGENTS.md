@@ -51,7 +51,7 @@ demo program `ww-demo`, the native template `ww-hello`, the plugins of the stabl
    toolchain there without the word of the owner of that computer; the tests draw without a
    screen.
 9. The documents hold the current state; the history of the changes is in `docs/releases/`.
-10. Versions: `version` of the workspace (0.1.48 on 09.11.2026) grows with every pull request
+10. Versions: `version` of the workspace (0.1.49 on 09.11.2026) grows with every pull request
     that reaches `main`. An agent changes the third number alone; the first and the second
     change only on the word of the owner. `wwrt::plugin::ABI` names it. The interface of the
     plugins (`wwrt::plugin::API`, `WW_API_VERSION`) stays 1 until the first release; the crate

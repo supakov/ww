@@ -49,25 +49,30 @@ pub fn display_name(path: &Path) -> String {
 
 /// Reads a text file of at most `limit` bytes, UTF-8 without a byte order mark.
 pub fn read_text(path: &Path, limit: u64) -> Result<String, JsonError> {
+    let bytes = read_limited(path, limit)?;
     let name = display_name(path);
-    let meta = std::fs::metadata(path).map_err(|source| JsonError::Io {
-        name: name.clone(),
-        source,
-    })?;
-    if meta.len() > limit {
-        return Err(JsonError::TooLarge { name, limit });
-    }
-    let bytes = std::fs::read(path).map_err(|source| JsonError::Io {
-        name: name.clone(),
-        source,
-    })?;
-    if bytes.len() as u64 > limit {
-        return Err(JsonError::TooLarge { name, limit });
-    }
     if bytes.starts_with(&BOM) {
         return Err(JsonError::Bom { name });
     }
     String::from_utf8(bytes).map_err(|_| JsonError::Utf8 { name })
+}
+
+/// The bytes of a file of at most `limit` bytes, through `crate::files`.
+fn read_limited(path: &Path, limit: u64) -> Result<Vec<u8>, JsonError> {
+    let name = display_name(path);
+    crate::files::read(path, limit).map_err(|source| {
+        if source.kind() == std::io::ErrorKind::InvalidData {
+            JsonError::TooLarge {
+                name: name.clone(),
+                limit,
+            }
+        } else {
+            JsonError::Io {
+                name: name.clone(),
+                source,
+            }
+        }
+    })
 }
 
 /// The text of bytes another program wrote: UTF-8 with or without its byte order mark, or UTF-16
@@ -106,19 +111,10 @@ pub fn decode_bom(bytes: &[u8]) -> Option<String> {
 /// Reads a text file of at most `limit` bytes written by another program, in the encodings of
 /// [`decode_bom`].
 pub fn read_text_bom(path: &Path, limit: u64) -> Result<String, JsonError> {
-    let name = display_name(path);
-    let meta = std::fs::metadata(path).map_err(|source| JsonError::Io {
-        name: name.clone(),
-        source,
-    })?;
-    if meta.len() > limit {
-        return Err(JsonError::TooLarge { name, limit });
-    }
-    let bytes = std::fs::read(path).map_err(|source| JsonError::Io {
-        name: name.clone(),
-        source,
-    })?;
-    decode_bom(&bytes).ok_or(JsonError::Utf8 { name })
+    let bytes = read_limited(path, limit)?;
+    decode_bom(&bytes).ok_or(JsonError::Utf8 {
+        name: display_name(path),
+    })
 }
 
 /// Parses JSON text into `T` after the checks of this module.
@@ -232,9 +228,7 @@ pub fn write_atomic(path: &Path, text: &str) -> Result<(), DocError> {
         name: name.clone(),
         source,
     };
-    let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, text).map_err(io)?;
-    std::fs::rename(&tmp, path).map_err(io)
+    crate::files::write(path, text.as_bytes()).map_err(io)
 }
 
 /// The deepest nesting of objects and arrays in JSON text, counted outside strings.

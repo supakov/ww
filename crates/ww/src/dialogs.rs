@@ -8,9 +8,7 @@ use crate::folders::exe_dir;
 
 /// Writes a file through a temporary neighbour that replaces the target.
 pub fn write_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, bytes).map_err(|e| format!("{}: {e}", path.display()))?;
-    std::fs::rename(&tmp, path).map_err(|e| format!("{}: {e}", path.display()))
+    ww_base::files::write(path, bytes).map_err(|e| format!("{}: {e}", path.display()))
 }
 
 /// A path as the files of the program keep it, in lower case: a name made of a file or a folder

@@ -3,5 +3,6 @@
 //! inside the program folder kept relative to it (`paths`), the clock (`clock`). No window here.
 
 pub mod clock;
+pub mod files;
 pub mod jsonfile;
 pub mod paths;

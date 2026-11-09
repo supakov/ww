@@ -132,6 +132,24 @@ pub fn languages(dir: &Path) -> Vec<Language> {
             });
         }
     }
+    // In a browser the folders of the page are the files read over http (`store::preload`).
+    #[cfg(target_arch = "wasm32")]
+    for code in crate::store::preloaded().iter().filter_map(|p| {
+        let rest = p.strip_prefix("lang/")?;
+        rest.strip_suffix("/ui.json")
+            .filter(|c| !c.contains('/'))
+            .map(str::to_owned)
+    }) {
+        if out.iter().any(|o| o.code == code) {
+            continue;
+        }
+        let file = dir.join(&code).join("ui.json");
+        if let Ok(text) = jsonfile::read_text(&file, MAX_BYTES)
+            && let Ok((name, _)) = parse(&text, &format!("{code}/ui.json"))
+        {
+            out.push(Language { code, name });
+        }
+    }
     if let Ok(entries) = std::fs::read_dir(dir) {
         let mut found: Vec<Language> = entries
             .filter_map(Result::ok)

@@ -170,6 +170,16 @@ download through `ww::store::download(name, bytes, mime)` (the theme editor does
 `App::open_dialog`, the synchronous dialogs of rfd, `widgets::in_folder`, the title bar colours and
 `ww::run` are native only. The keys Ctrl+N, Ctrl+W and Ctrl+Tab belong to the browser.
 
+The files of a program and of the libraries it takes go through `ww_base::files` (`read`, `write`,
+`exists`, `remove`, `list`; `jsonfile::read` and `write_atomic`, `ww::dialogs::write_file` use it):
+natively the disk, in a browser the backend `ww::web::start` sets (`ww::store::install_files`): the
+storage of the page, and a download for a path under `ww_base::files::DOWNLOAD` (`download_path`),
+so code that saves a document by a path a dialog gave saves it in a browser too when its dialog
+gives such a path. Before the window starts, `ww::store::preload` reads `files.json` next to the
+page (a list of relative paths) and every file it names over http; the store, the file layer and
+the languages of `lang/` read them before the storage of the page. A page opened from `file://`
+reads none, and a browser lists no folder of a server, so the list is that file.
+
 ## 6. Texts and translations
 
 Every text of the interface is `tr("English")` or `trf("English {name}", &[("name", &value)])`.

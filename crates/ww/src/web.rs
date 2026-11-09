@@ -56,6 +56,13 @@ async fn run<A: App>(
         .ok_or_else(|| format!("the page has no element {canvas_id}"))?
         .dyn_into::<web_sys::HtmlCanvasElement>()
         .map_err(|_| format!("{canvas_id} is not a canvas"))?;
+    // The catalogs, themes and translations of the folder of the page, read over http, and the
+    // file layer of the page, before anything reads a file.
+    let read = crate::store::preload().await;
+    crate::store::install_files();
+    if read > 0 {
+        web_sys::console::log_1(&format!("{read} files of the folder of the page read").into());
+    }
     let (loaded, settings_path) = Settings::<A::Extra>::load(A::name());
     let (settings, warning) = match loaded {
         Ok(s) => (s, None),
