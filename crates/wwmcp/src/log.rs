@@ -131,7 +131,7 @@ fn crash_file() -> Option<PathBuf> {
 }
 
 /// Sets the logs folder and installs the panic hook, once per process. `program` names the
-/// program and its version for a crash (`WinWeaver 0.1.47+...`), its first word in lower case
+/// program and its version for a crash, its first word in lower case
 /// names the log of the window; `headless` is true for a process that only serves MCP.
 pub fn init(dir: &Path, program: &str, headless: bool) {
     let window = program

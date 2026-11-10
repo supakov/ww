@@ -58,7 +58,7 @@ pub struct McpPanel {
     /// The HTTP transport of the window while it runs.
     pub http: Option<HttpServer>,
     pub error: String,
-    /// The command of the program in the configurations for clients (`wview`), and the key of
+    /// The command of the program in the configurations for clients, and the key of
     /// the server in them.
     pub program: String,
     /// The selected call of the journal, by its place in the journal.
