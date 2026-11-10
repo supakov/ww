@@ -17,7 +17,7 @@ members = [
 exclude = ["examples/ww-grey"]
 
 [workspace.package]
-version = "0.1.49"
+version = "0.1.50"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT"

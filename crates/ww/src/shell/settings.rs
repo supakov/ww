@@ -7,6 +7,7 @@ use super::{App, ShellAct, ShellDoc, Window};
 use crate::doc::Document;
 use crate::folders::dir;
 use crate::i18n::{self, tr, trf};
+#[cfg(not(target_arch = "wasm32"))]
 use crate::renderer::Renderer;
 use crate::settings::{PageWidth, ThemeChoice};
 use crate::{style, themes, themeview};
@@ -130,6 +131,8 @@ impl<A: App> Window<A> {
             style::section_title(ui, tr("Window"));
             ui.add_space(4.0);
             self.app.settings_general(&mut self.shell, ui);
+            // A page draws with the WebGL of its browser alone: nothing to choose there.
+            #[cfg(not(target_arch = "wasm32"))]
             self.renderer_choice(ui);
             ui.checkbox(
                 &mut self.shell.settings.restore_tabs,
@@ -181,6 +184,7 @@ impl<A: App> Window<A> {
     }
 
     /// The renderer of the next start, among the ones of this executable.
+    #[cfg(not(target_arch = "wasm32"))]
     fn renderer_choice(&mut self, ui: &mut egui::Ui) {
         let settings = &mut self.shell.settings;
         let current = Renderer::parse(&settings.renderer);
