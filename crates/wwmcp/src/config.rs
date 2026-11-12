@@ -158,13 +158,11 @@ impl Config {
         text
     }
 
-    /// Writes the file, with its folder.
+    /// Writes the file, with its folder, through a temporary neighbour that replaces it
+    /// (`ww_base::files::write`): a write that fails leaves the old file whole.
     pub fn save(&self, path: &Path) -> Result<(), String> {
         self.check()?;
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-        }
-        std::fs::write(path, self.to_text()).map_err(|e| e.to_string())
+        ww_base::files::write(path, self.to_text().as_bytes()).map_err(|e| e.to_string())
     }
 
     /// The settings of a source, the defaults for one the file does not name.

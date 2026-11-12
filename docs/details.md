@@ -90,7 +90,13 @@ files and of the system of its plugins.
   `#anchor` scrolls the page to its heading, any other goes to `open_url`, and the shell takes it
   (`ShellAct::OpenLink`): a `.md` or `.txt` file or a file without an extension opens in the program,
   relative to the page (`Shell::linked_file`; a text file may show as it is, `MdDoc::plain`), a
-  web link or a file of another kind is asked first and goes to the browser. A page scrolls with the
+  web link or a file of another kind is asked first and goes to the browser. A web link is
+  `http://`, `https://` or `mailto:` alone; a link of any other scheme but `file:` (`javascript:`,
+  `data:`, the scheme of some program) is opened nowhere and the status bar says so
+  (`window.rs`, `other_scheme`; `ShellAct::OpenWeb` refuses it too). Quotes and lists nest
+  `markdown::MAX_NESTING` deep at most (32, a list and its items one each): deeper ones are no
+  blocks of their own and their text joins the blocks around them, so a page of thousands of `>`
+  overflows no stack. A page scrolls with the
   arrows, the page keys, Home and End (`mdview::key_offset`), keeps its place a tab (its own scroll id)
   and its selected text when another tab comes in front (`LabelSelectionState` saved and given back). Lists put their markers in a column of their own on the baseline of the first line; blocks of
   code have a copy button; the whole page (its text, its blocks of code, its tables) is as wide as
@@ -152,3 +158,28 @@ files and of the system of its plugins.
   are joined to the ones of a child, while `RUSTFLAGS` stands for all of them.
 - A heredoc of Git Bash swallows doubled backslashes: text with backslashes is written with the
   file tools or a script file.
+- A plugin DLL is loaded by its absolute path with the search of its imports limited to its own
+  folder, the folder of the program and the system folder (`plugin.rs`, `open_library`): a test
+  or a program that loads a plugin keeps what the plugin imports in one of them, or in the
+  process already (wwrt and std are). `host::plugins_dir` takes the folder of the executable
+  for a missing folder `plugins` in a debug build alone.
+- The output of a plugin of the stable interface is untrusted: the size of its picture is
+  checked before anything is read or allocated (`stable.rs`, `picture_fits`), and the functions
+  of the host a plugin calls catch a panic of the code they run (`guarded`), since a panic that
+  leaves an `extern "C"` function ends the process.
+
+## Files, the MCP server
+
+- A file written (`ww_base::files::write_disk`, which `write` without a backend, `ww::store`
+  and the configuration of the MCP server use): a temporary neighbour
+  `<name>.<process>-<number>.tmp` made anew (`create_new`), synced, renamed over the target and
+  removed when a step fails. Never `path.with_extension("tmp")`: that is a file a user may have.
+- The secret fields of the journal and of the log are one rule for the line of a call, the
+  arguments and the answer (`server.rs`, `is_secret`): the names the sources give, and every
+  name that holds `password`, `token`, `authorization` or `secret`. A new place that shows
+  arguments goes through it.
+- The bridge of the tools of the window (`bridge.rs`): a request is run by the window or given
+  up by its asker, never both (one atomic state a request). A tool reported as failed did not
+  happen.
+- A configuration of the MCP server that did not read is never written over
+  (`McpPanel::saved` is `None` until Save as or another file opened).

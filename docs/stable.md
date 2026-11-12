@@ -101,11 +101,18 @@ iterations a call may ask.
   clicked and clicked twice, the movement of a drag, the wheel in lines.
 - A picture still at work sets `again`, and the host draws another frame at once; an idle view
   costs nothing.
+- A picture is at most as wide and as high as the longest side of a texture of the renderer
+  (2048 pixels at least, 8192 or more on a graphics card of today) and at most 256 MB of pixels:
+  a larger one is refused, the last picture stays and the log of the program says so once a
+  view. A view draws what its input shows (`width`, `height`), not the whole of a large file.
+- A function of the host that fails inside (`call_tool` on a tool that crashes, `open_file`,
+  `slice`, the `read` of a source, `cache`) gives its failure (`WW_TOOL_FAILED`, NULL, no bytes)
+  and never ends the program.
 
 The sizes on x86-64, for a binding of another language to check against: `ww_format` 40,
-`ww_file` 24, `ww_source` 48, `ww_cache` 56, `ww_host` 40, `ww_key` 16, `ww_input` 88,
-`ww_control` 64, `ww_output` 64, `ww_plugin` 96 bytes. The tests of `wwrt` and of `ww-stable`
-check them.
+`ww_file` 24, `ww_source` 48, `ww_cache` 56, `ww_host` 64, `ww_tool` 48, `ww_option` 56,
+`ww_tools` 64, `ww_key` 16, `ww_input` 88, `ww_control` 64, `ww_output` 64, `ww_plugin` 96
+bytes. The tests of `wwrt` and of `ww-stable` check them.
 
 ## 4. Building a plugin
 

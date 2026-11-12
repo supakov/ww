@@ -312,6 +312,123 @@ fn a_plugin_of_the_stable_interface_is_a_plugin() {
 }
 
 #[test]
+fn a_picture_too_large_is_refused_and_the_last_one_stays() {
+    assert!(picture_fits(2, 2, 2048) && picture_fits(2048, 2048, 2048));
+    assert!(!picture_fits(2049, 1, 2048) && !picture_fits(1, 2049, 2048));
+    // Sides the renderer would take, bytes beyond the budget; sizes that overflow 32 bits.
+    assert!(picture_fits(8192, 8192, 16384) && !picture_fits(8193, 8192, 16384));
+    assert!(!picture_fits(u32::MAX, u32::MAX, usize::MAX));
+    // SAFETY: the table of the test is static.
+    let plugin = unsafe { wrap(&TABLE.0) }.unwrap();
+    let mut error = vec![0 as c_char; 16];
+    // SAFETY: the view the plugin of the test opens, closed when the view of the host drops.
+    let opened = unsafe { open(c"good.pic".as_ptr(), error.as_mut_ptr(), 16) };
+    let mut view = StableView {
+        table: plugin.table,
+        view: opened,
+        source: None,
+        texture: None,
+        size: [0, 0],
+        refused: false,
+        controls: Vec::new(),
+        keys: 0,
+        cursor: 0,
+        status: String::new(),
+        changes: Vec::new(),
+    };
+    let ctx = egui::Context::default();
+    // SAFETY: an output of zeros is a valid one.
+    let mut out: WwOutput = unsafe { std::mem::zeroed() };
+    out.size = std::mem::size_of::<WwOutput>() as u32;
+    (out.width, out.height, out.stride, out.changed) = (2, 2, 8, 1);
+    out.pixels = PIXELS.as_ptr();
+    out.status = c"small".as_ptr();
+    // SAFETY: the output names the pixels of the test.
+    unsafe { view.take(&ctx, &out) };
+    assert_eq!(view.size, [2, 2]);
+    let first = view.texture.as_ref().unwrap().id();
+    // A size no memory holds, with the same four pixels behind it: nothing is read or
+    // allocated, the picture and its size stay, the rest of the output is taken.
+    (out.width, out.height) = (1 << 30, 1 << 30);
+    out.status = c"huge".as_ptr();
+    // SAFETY: the pixels are not read for a picture that is refused.
+    unsafe { view.take(&ctx, &out) };
+    assert!(view.refused);
+    assert_eq!(view.size, [2, 2]);
+    assert_eq!(view.texture.as_ref().unwrap().id(), first);
+    assert_eq!(view.status, "huge");
+    // A side longer than a texture of the renderer, though its bytes are few.
+    (out.width, out.height) = (1 << 20, 1);
+    // SAFETY: as above.
+    unsafe { view.take(&ctx, &out) };
+    assert_eq!(view.size, [2, 2]);
+}
+
+#[test]
+fn a_tool_that_fails_inside_is_a_failed_call_for_the_plugin() {
+    use std::sync::Arc;
+
+    use wwmcp::{Config, Info, Server, Source, schema};
+
+    /// A source whose tool panics.
+    struct Broken;
+    impl Source for Broken {
+        fn id(&self) -> String {
+            "broken".to_owned()
+        }
+        fn title(&self) -> String {
+            "Broken".to_owned()
+        }
+        fn tools(&self) -> Vec<ToolDef> {
+            let none = schema(serde_json::json!({}), &[]);
+            vec![
+                ToolDef::new("broken_tool", "x", "Fails inside.", none.clone()),
+                ToolDef::new("whole_tool", "x", "Answers.", none),
+            ]
+        }
+        fn call(&self, tool: &str, _: &Value, _: &Call<'_>) -> Outcome {
+            assert!(tool != "broken_tool", "a failure inside a tool");
+            Ok(Value::from("whole"))
+        }
+    }
+
+    let _one = crate::tools::TESTS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let server = Server::new(Info::default(), Config::default()).with(Arc::new(Broken));
+    crate::tools::install(Arc::new(server));
+    // SAFETY: the table of the host is static; the texts live for the calls and the answers are
+    // freed by the function of the host.
+    unsafe {
+        let host = &*host_for("caller");
+        let call = host.call_tool.unwrap();
+        let mut answer: *mut c_char = std::ptr::null_mut();
+        let code = call(
+            host.this,
+            c"broken_tool".as_ptr(),
+            c"{}".as_ptr(),
+            &raw mut answer,
+        );
+        assert_eq!(
+            code,
+            Kind::Failed.code(),
+            "the panic did not cross the call"
+        );
+        assert!(text(answer).contains("failed inside the program"));
+        (host.free_text.unwrap())(answer);
+        // The host goes on: the next call answers.
+        let code = call(
+            host.this,
+            c"whole_tool".as_ptr(),
+            c"{}".as_ptr(),
+            &raw mut answer,
+        );
+        assert_eq!((code, text(answer).as_str()), (0, "\"whole\""));
+        (host.free_text.unwrap())(answer);
+    }
+}
+
+#[test]
 fn some_bytes_reach_the_plugin_through_a_source() {
     // SAFETY: the table of the test is static.
     let plugin = unsafe { wrap(&TABLE.0) }.unwrap();

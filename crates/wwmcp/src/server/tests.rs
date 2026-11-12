@@ -60,6 +60,9 @@ impl Source for Demo {
     fn instructions(&self) -> String {
         "Greet first.".to_owned()
     }
+    fn secrets(&self) -> Vec<String> {
+        vec!["product_key".to_owned()]
+    }
 }
 
 /// A second source with a tool whose name the first has.
@@ -187,7 +190,13 @@ fn a_call_goes_into_the_journal_without_its_secrets() {
         &s,
         1,
         "tools/call",
-        json!({ "name": "greet", "arguments": { "name": "Ann", "token": "secret-token" } }),
+        json!({ "name": "greet", "arguments": {
+            "name": "Ann",
+            "token": "secret-token",
+            "New_Password": "hunter2",
+            "product_key": "ABCDE-12345",
+            "count": 3,
+        } }),
     );
     assert_eq!(answer["result"]["isError"], false);
     assert_eq!(answer["result"]["structuredContent"]["text"], "Hello, Ann");
@@ -203,11 +212,26 @@ fn a_call_goes_into_the_journal_without_its_secrets() {
     s.call("count", &json!({}), &Caller::Program).unwrap();
     let journal = s.journal();
     assert_eq!(journal.len(), 3);
-    assert_eq!(journal[0].detail, "name=Ann token=secret-token");
+    // A secret field shows no value in the line of the journal and of the log, whatever the
+    // value looks like: the words of every server, and the fields a source names.
+    assert_eq!(
+        journal[0].detail,
+        "name=Ann token=*** New_Password=*** product_key=*** count=3"
+    );
+    for secret in ["secret-token", "hunter2", "ABCDE-12345"] {
+        assert!(!journal[0].detail.contains(secret), "{secret}");
+    }
+    assert_eq!(
+        journal_detail(&json!({ "api_token": "abc", "path": "a.txt" })),
+        "api_token=*** path=a.txt"
+    );
     assert_eq!(journal[1].result, Status::Error(Kind::ReadFailed));
     assert_eq!(journal[2].client, "program");
     let whole = s.journal_entry(0).unwrap();
     assert_eq!(whole.arguments["token"], "***");
+    assert_eq!(whole.arguments["New_Password"], "***");
+    assert_eq!(whole.arguments["product_key"], "***");
+    assert_eq!(whole.arguments["count"], 3);
     assert_eq!(whole.answer["password"], "***");
     assert_eq!(journal[0].arguments, Value::Null);
 }
@@ -242,4 +266,27 @@ fn a_long_text_is_cut() {
     let big = Value::from("b".repeat(ANSWER_KEPT + 5));
     let kept = kept(&big, &[]);
     assert!(kept.as_str().unwrap().ends_with("bytes in all)"));
+}
+
+#[test]
+fn the_journal_keeps_the_start_of_long_arguments() {
+    let s = server();
+    let long = "x".repeat(4 * ANSWER_KEPT);
+    s.call(
+        "greet",
+        &json!({ "name": "Ann", "password": "hunter2", "notes": long }),
+        &Caller::Program,
+    )
+    .unwrap();
+    let whole = s.journal_entry(0).unwrap();
+    let text = whole.arguments.as_str().expect("cut to a text");
+    assert!(text.len() < ANSWER_KEPT + 100, "{}", text.len());
+    assert!(text.ends_with("bytes in all)"), "the cut is named");
+    assert!(text.contains("\"name\":\"Ann\""), "the start is kept");
+    assert!(!text.contains("hunter2"), "without its secrets");
+    assert_eq!(whole.detail, "name=Ann password=*** notes=<text>");
+    // Short arguments stay the object they were.
+    s.call("greet", &json!({ "name": "Bo" }), &Caller::Program)
+        .unwrap();
+    assert_eq!(s.journal_entry(1).unwrap().arguments["name"], "Bo");
 }

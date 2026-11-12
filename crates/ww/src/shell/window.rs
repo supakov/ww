@@ -186,6 +186,12 @@ impl<A: App> Window<A> {
             }
             ShellAct::OpenEmbedded(files, link) => self.app.open_embedded(shell, files, &link),
             ShellAct::OpenLink(link) => {
+                // A link of a scheme that is neither the web, a mail nor a file (`javascript:`,
+                // the scheme of some program) is opened nowhere.
+                if let Some(scheme) = other_scheme(&link) {
+                    shell.open_failed(format_args!("links of the scheme {scheme} are not opened"));
+                    return;
+                }
                 // A link of a page of a set to another file of the set.
                 if !is_web(&link)
                     && let Some((files, page)) = shell.active_page()
@@ -218,7 +224,12 @@ impl<A: App> Window<A> {
                     ));
                 }
             }
-            ShellAct::OpenWeb(link) => shell.open_web = Some(link),
+            // What goes to the browser is a web address, a mail or a file of this PC.
+            ShellAct::OpenWeb(link) => {
+                if other_scheme(&link).is_none() {
+                    shell.open_web = Some(link);
+                }
+            }
             ShellAct::About => shell.about_open = true,
             ShellAct::FoldJobs(folded) => shell.jobs_folded = folded,
             ShellAct::SaveAndClose(i) => {
@@ -470,10 +481,30 @@ impl<A: App> Window<A> {
     }
 }
 
-/// Whether a link leads outside the files of this PC: a web address or a mail.
+/// Whether a link leads outside the files of this PC: a web address (`http://`, `https://`)
+/// or a mail (`mailto:`), and nothing else.
 fn is_web(link: &str) -> bool {
-    let link = link.to_ascii_lowercase();
-    (link.contains("://") && !link.starts_with("file:")) || link.starts_with("mailto:")
+    let link = link.trim_start().to_ascii_lowercase();
+    ["http://", "https://", "mailto:"]
+        .iter()
+        .any(|scheme| link.starts_with(scheme))
+}
+
+/// The scheme of a link the window opens nowhere, in lower case: any scheme but the ones of
+/// `is_web` and `file`. A path has none, and the letter of a drive (`C:\notes.md`) is none.
+fn other_scheme(link: &str) -> Option<String> {
+    let link = link.trim_start();
+    if is_web(link) {
+        return None;
+    }
+    let (name, _) = link.split_once(':')?;
+    let named = name.len() > 1
+        && name.starts_with(|c: char| c.is_ascii_alphabetic())
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c));
+    let name = name.to_ascii_lowercase();
+    (named && name != "file").then_some(name)
 }
 
 /// Whether a link opens inside the program: a heading, a `.md` or `.txt` file or a file without an
@@ -600,5 +631,49 @@ impl<A: App> eframe::App for Window<A> {
         }
         self.shell.persist_settings();
         self.shell.log_status();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_the_web_a_mail_and_a_file_are_links_that_open() {
+        for web in [
+            "http://example.com",
+            "HTTPS://example.com/a.md#b",
+            "mailto:someone@example.com",
+        ] {
+            assert!(is_web(web) && other_scheme(web).is_none(), "{web}");
+            assert!(!opens_inside(web), "{web}");
+        }
+        // Any other scheme is no web address and is opened nowhere.
+        for (link, scheme) in [
+            ("javascript://example.com/%0aalert(1)", "javascript"),
+            ("javascript:alert(1)", "javascript"),
+            (" JavaScript:alert(1)", "javascript"),
+            ("data:text/html,<script>1</script>", "data"),
+            ("ftp://example.com/a.md", "ftp"),
+            ("ms-settings:display", "ms-settings"),
+            ("vbscript:x", "vbscript"),
+        ] {
+            assert!(!is_web(link), "{link}");
+            assert_eq!(other_scheme(link).as_deref(), Some(scheme), "{link}");
+        }
+        // The files of this PC: paths, the letter of a drive, a file address, a heading.
+        for file in [
+            "guide.md",
+            "docs/a b.md#part",
+            "C:\\notes\\a.md",
+            "C:/notes/a.md",
+            "file:///C:/notes/a.md",
+            "#heading",
+            "notes/10:30.md",
+        ] {
+            assert!(!is_web(file) && other_scheme(file).is_none(), "{file}");
+            assert!(opens_inside(file), "{file}");
+        }
+        assert!(!opens_inside("picture.png") && other_scheme("picture.png").is_none());
     }
 }

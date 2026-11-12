@@ -8,8 +8,9 @@ rem native plugin), the plugin of stable Rust built apart (examples\ww-grey), th
 rem where a compiler of C is found, and the folder of the demo with its plugins in dist\ww-demo,
 rem zipped as dist\ww-demo-<version>.zip with the folder inside.
 rem
-rem   check   first the checks of a commit: the format, clippy and the tests of the workspace, and
-rem           clippy of examples\ww-grey
+rem   check   first the checks of a commit: the format of the workspace and of examples\ww-grey,
+rem           clippy of the workspace, of W# for the browser (the target wasm32-unknown-unknown,
+rem           which rustup adds) and of examples\ww-grey, and the tests of the workspace
 rem
 rem The tools it takes, each from a variable or else from the PATH:
 rem   WW_CARGO   cargo, for example a script that runs it on half of the processor
@@ -85,7 +86,11 @@ if not defined DO_CHECK goto checks_done
 call :step "Format, clippy and the tests of the workspace"
 call "%CARGO_CMD%" fmt --all --check
 if errorlevel 1 goto failed
+call :grey fmt --check || goto failed
 call "%CARGO_CMD%" clippy --workspace --all-targets -- -D warnings
+if errorlevel 1 goto failed
+rem W# for the browser, as the Linux job of CI checks it.
+call "%CARGO_CMD%" clippy -p ww --no-default-features --features glow --target wasm32-unknown-unknown -- -D warnings
 if errorlevel 1 goto failed
 call "%CARGO_CMD%" test --workspace
 if errorlevel 1 goto failed
@@ -191,7 +196,8 @@ echo.
 echo Without options: the release builds of the workspace, of the plugin of stable Rust and of the
 echo plugin in C, and the folder of the demo with its plugins, zipped as dist\ww-demo-^<version^>.zip.
 echo.
-echo   check   first the format, clippy and the tests of the workspace
+echo   check   first the format, clippy and the tests of the workspace, clippy of W# for the
+echo           browser, the format and clippy of examples\ww-grey
 echo.
 echo WW_CARGO, WW_PYTHON, WW_RUSTC and WW_CC name the tools when the PATH has none of them.
 exit /b 0

@@ -1081,15 +1081,25 @@ pub fn attach_console() {
 }
 
 /// The folder of the plugins: the one the environment variable names, else `plugins` next to
-/// the executable, else the folder of the executable itself (a build of a workspace, where cargo
-/// writes every DLL).
+/// the executable. A debug build without that folder takes the folder of the executable itself
+/// (a build of a workspace, where cargo writes every DLL); a release build never does, so that
+/// a DLL put next to the executable of a program is not loaded as a plugin.
 pub fn plugins_dir(variable: &str) -> PathBuf {
     if let Some(dir) = std::env::var_os(variable) {
         return PathBuf::from(dir);
     }
-    let here = ww::folders::exe_dir();
+    plugins_dir_of(&ww::folders::exe_dir(), cfg!(debug_assertions))
+}
+
+/// The folder of the plugins of a program in the folder `here`; `workspace` allows the folder
+/// itself when it has no folder `plugins`.
+fn plugins_dir_of(here: &Path, workspace: bool) -> PathBuf {
     let folder = here.join("plugins");
-    if folder.is_dir() { folder } else { here }
+    if workspace && !folder.is_dir() {
+        here.to_path_buf()
+    } else {
+        folder
+    }
 }
 
 /// The plugins with the formats they open, their files and where they come from, and the DLLs
@@ -1199,4 +1209,26 @@ pub fn probe(plugins: &Plugins, path: &Path) -> Result<String, String> {
         started.elapsed(),
         view.status()
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_release_build_loads_no_dll_next_to_the_executable() {
+        let here = std::env::temp_dir().join(format!("wwrt-plugins-dir-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&here);
+        std::fs::create_dir_all(&here).unwrap();
+        // No folder `plugins`: a build of a workspace takes the folder of the executable, a
+        // release build the folder that is not there, where nothing loads.
+        assert_eq!(plugins_dir_of(&here, true), here);
+        let folder = here.join("plugins");
+        assert_eq!(plugins_dir_of(&here, false), folder);
+        assert!(Plugins::load_dir(&folder).loaded.is_empty());
+        std::fs::create_dir_all(&folder).unwrap();
+        assert_eq!(plugins_dir_of(&here, true), folder);
+        assert_eq!(plugins_dir_of(&here, false), folder);
+        let _ = std::fs::remove_dir_all(&here);
+    }
 }

@@ -75,6 +75,12 @@ pub enum Block {
     Rule,
 }
 
+/// The deepest nesting of quotes and lists a page keeps (a list and each of its items count
+/// one each). A quote or a list deeper than that is not a block of its own: its blocks join the
+/// ones around it, so a page of thousands of `>` neither overflows the stack when it is drawn,
+/// compared or dropped, nor loses its text.
+pub const MAX_NESTING: usize = 32;
+
 /// What a start of the parser opened, closed by its end.
 enum Open {
     Paragraph,
@@ -90,6 +96,8 @@ enum Open {
     Emphasis,
     Strike,
     Link,
+    /// A quote, a list or an item nested too deep: its blocks go to the container around it.
+    Flat,
     Other,
 }
 
@@ -107,9 +115,24 @@ struct Builder {
     code: Option<String>,
     style: Span,
     links: Vec<String>,
+    /// How many quotes, lists and items nested too deep are open.
+    flat: usize,
 }
 
 impl Builder {
+    /// Whether a quote or a list that starts now is nested too deep: inside one that was, or
+    /// below the deepest container a page keeps.
+    fn too_deep(&self) -> bool {
+        self.flat > 0 || self.frames.len() > MAX_NESTING
+    }
+
+    /// Opens a quote, a list or an item that is not a block of its own.
+    fn flat(&mut self) -> Open {
+        self.flush();
+        self.flat += 1;
+        Open::Flat
+    }
+
     fn push(&mut self, block: Block) {
         if let Some(Frame::Blocks(blocks)) = self.frames.last_mut() {
             blocks.push(block);
@@ -163,6 +186,9 @@ impl Builder {
                 self.code = Some(String::new());
                 Open::Code
             }
+            Tag::List(_) | Tag::BlockQuote(_) if self.too_deep() => self.flat(),
+            // The items of a list that is no block of its own are none either.
+            Tag::Item if self.flat > 0 => self.flat(),
             Tag::List(first) => {
                 self.flush();
                 self.frames.push(Frame::List(first, Vec::new()));
@@ -266,6 +292,10 @@ impl Builder {
             Open::Link => {
                 self.links.pop();
             }
+            Open::Flat => {
+                self.flush();
+                self.flat = self.flat.saturating_sub(1);
+            }
             Open::Other => {}
         }
     }
@@ -282,6 +312,7 @@ pub fn parse(text: &str) -> Vec<Block> {
         code: None,
         style: Span::default(),
         links: Vec::new(),
+        flat: 0,
     };
     for event in Parser::new_ext(text, options) {
         match event {
@@ -818,6 +849,86 @@ mod tests {
         joined.push("a", &span(""));
         joined.push("b", &span(""));
         assert_eq!(joined.spans.len(), 1);
+    }
+
+    /// The deepest nesting of quotes and lists of some blocks, and their paragraphs in order.
+    fn depth_and_texts(blocks: &[Block], texts: &mut Vec<String>) -> usize {
+        let mut deepest = 0;
+        for block in blocks {
+            let inner = match block {
+                Block::Quote(inner) => 1 + depth_and_texts(inner, texts),
+                Block::List(_, items) => items
+                    .iter()
+                    .map(|item| 2 + depth_and_texts(item, texts))
+                    .max()
+                    .unwrap_or(1),
+                Block::Paragraph(p) => {
+                    texts.push(p.plain());
+                    0
+                }
+                _ => 0,
+            };
+            deepest = deepest.max(inner);
+        }
+        deepest
+    }
+
+    #[test]
+    fn a_page_nested_too_deep_is_flattened_and_drawn() {
+        // Thousands of quotes in one line, then a text after them.
+        let quotes = format!("{} deep inside\n\nafter\n", ">".repeat(5000));
+        // Lists inside lists: every level two spaces further in.
+        let mut lists = String::new();
+        for level in 0..200 {
+            lists.push_str(&format!("{}- item {level}\n", "  ".repeat(level)));
+        }
+        // Quotes and lists in turn.
+        let mixed = format!("{}text of both\n", "> - ".repeat(400));
+        for (page, wanted) in [
+            (&quotes, "deep inside"),
+            (&lists, "item 199"),
+            (&mixed, "text of both"),
+        ] {
+            let blocks = parse(page);
+            let mut texts = Vec::new();
+            let depth = depth_and_texts(&blocks, &mut texts);
+            // The parser gives every level: the page is as deep as the limit, which cut it.
+            assert!(
+                (MAX_NESTING..=MAX_NESTING + 1).contains(&depth),
+                "{depth}: nested to the limit and no deeper"
+            );
+            assert!(
+                texts.iter().any(|t| t.contains(wanted)),
+                "the text of the deepest block is kept: {wanted}"
+            );
+            // Drawn without a window: the recursion of the drawing ends.
+            let ctx = egui::Context::default();
+            let view = View {
+                width: 600.0,
+                page: 600.0,
+                anchor: None,
+            };
+            let mut out = Outcome::default();
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                show(ui, &blocks, &view, &mut out);
+            });
+            output.textures_delta.clear();
+            assert!(!output.shapes.is_empty());
+        }
+        assert_eq!(
+            parse(&quotes).last(),
+            Some(&Block::Paragraph(Inline {
+                spans: vec![span("after")]
+            })),
+            "what follows the quotes is a block of the page"
+        );
+        // A page of the usual depth keeps its shape.
+        let usual = parse("> a\n>\n> > b\n\n- one\n  - two\n");
+        let Block::Quote(outer) = &usual[0] else {
+            panic!("{:?}", usual[0]);
+        };
+        assert!(matches!(&outer[1], Block::Quote(inner) if inner.len() == 1));
+        assert!(matches!(&usual[1], Block::List(None, items) if items[0].len() == 2));
     }
 
     #[test]

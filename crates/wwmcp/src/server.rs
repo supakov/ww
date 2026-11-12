@@ -18,11 +18,13 @@ pub const PROTOCOL_VERSION: &str = "2025-06-18";
 /// The largest message the server reads.
 pub const MAX_MESSAGE: usize = 4 * 1024 * 1024;
 const JOURNAL_SIZE: usize = 500;
-/// The longest answer the journal keeps for the details of a call and the detailed log.
+/// The longest arguments and the longest answer the journal keeps for the details of a call
+/// and the detailed log, each.
 const ANSWER_KEPT: usize = 16 * 1024;
 /// The longest text of one tool result; a longer one is cut with a note.
 const TEXT_LIMIT: usize = 60_000;
-/// The fields whose values never reach the journal or the log, for every server.
+/// The words of the fields whose values never reach the journal or the log, for every server: a
+/// field whose name holds one of them (`password`, `new_password`, `api_token`) is secret.
 const SECRETS: [&str; 4] = ["password", "token", "authorization", "secret"];
 
 /// What the server says of itself at `initialize`.
@@ -41,11 +43,12 @@ pub struct Entry {
     pub time: String,
     pub client: String,
     pub method: String,
-    /// The arguments that are identifiers, numbers or switches; other texts are not shown.
+    /// The arguments that are identifiers, numbers or switches; other texts are not shown, and
+    /// a secret field shows `***`.
     pub detail: String,
     pub result: Status,
-    /// The whole arguments and the answer, without the secret fields; a long answer is cut to
-    /// its first characters.
+    /// The arguments and the answer, without the secret fields; long ones are each cut to
+    /// their first characters, as a text.
     pub arguments: Value,
     pub answer: Value,
     /// How long the call took, in milliseconds.
@@ -194,13 +197,10 @@ impl Server {
         self.lock().journal.get(index).cloned()
     }
 
-    /// The secret fields of every source with the ones of every server.
+    /// The secret fields the sources name; the words of every server (`SECRETS`) are known to
+    /// `is_secret` itself.
     fn secrets(&self) -> Vec<String> {
-        let mut out: Vec<String> = SECRETS.iter().map(|s| (*s).to_owned()).collect();
-        for source in &self.sources {
-            out.extend(source.secrets());
-        }
-        out
+        self.sources.iter().flat_map(|s| s.secrets()).collect()
     }
 
     /// A copy of a value without the values of the secret fields.
@@ -213,7 +213,7 @@ impl Server {
     /// program meets the switches of the configuration (a tool that is off is not found), the
     /// mode and the options the tool needs. The call goes into the journal.
     pub fn call(&self, name: &str, args: &Value, caller: &Caller) -> Outcome {
-        let detail = journal_detail(args);
+        let detail = detail_of(args, &self.secrets());
         let started = web_now();
         log::line("INFO", &format!("tool {name} {detail}"));
         let outcome = self.run(name, args, caller);
@@ -496,22 +496,19 @@ impl Server {
             method: call.method.to_owned(),
             detail: call.detail,
             result: call.result,
-            arguments: redact(call.arguments, &secrets),
+            arguments: kept(call.arguments, &secrets),
             answer: kept(call.answer, &secrets),
             ms: call.ms,
         };
         if state.config.detailed_log {
-            log::event(
-                "DETAIL",
-                json!({
-                    "client": entry.client,
-                    "call": entry.method,
-                    "result": entry.result.name(),
-                    "ms": entry.ms,
-                    "arguments": entry.arguments,
-                    "answer": entry.answer,
-                }),
-            );
+            log::detail(json!({
+                "client": entry.client,
+                "call": entry.method,
+                "result": entry.result.name(),
+                "ms": entry.ms,
+                "arguments": entry.arguments,
+                "answer": entry.answer,
+            }));
         }
         state.journal.push(entry);
         let excess = state.journal.len().saturating_sub(JOURNAL_SIZE);
@@ -582,14 +579,27 @@ fn error(id: Value, code: i64, message: &str) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })
 }
 
-/// A copy of a value without the values of the secret fields.
+/// The answer of a transport to what is no message at all (a line too long, bytes that are not
+/// UTF-8): an error without an id.
+pub(crate) fn refusal(code: i64, message: &str) -> String {
+    error(Value::Null, code, message).to_string()
+}
+
+/// Whether a field is secret: one of the names given (the ones the sources name), or a name
+/// that holds one of the words of every server. The case of the letters does not matter.
+fn is_secret(key: &str, secrets: &[String]) -> bool {
+    let key = key.to_ascii_lowercase();
+    secrets.iter().any(|s| key.eq_ignore_ascii_case(s)) || SECRETS.iter().any(|w| key.contains(w))
+}
+
+/// A copy of a value without the values of the secret fields: the ones named, and every field
+/// whose name holds `password`, `token`, `authorization` or `secret`.
 pub fn redact(value: &Value, secrets: &[String]) -> Value {
     match value {
         Value::Object(map) => Value::Object(
             map.iter()
                 .map(|(k, v)| {
-                    let secret = secrets.iter().any(|s| k.eq_ignore_ascii_case(s));
-                    let v = if secret && !v.is_null() {
+                    let v = if is_secret(k, secrets) && !v.is_null() {
                         Value::from("***")
                     } else {
                         redact(v, secrets)
@@ -603,7 +613,8 @@ pub fn redact(value: &Value, secrets: &[String]) -> Value {
     }
 }
 
-/// An answer for the journal: without secrets, and as the start of its text when it is long.
+/// The arguments or the answer of a call for the journal: without secrets, and as the start of
+/// their text when they are long.
 fn kept(value: &Value, secrets: &[String]) -> Value {
     let value = redact(value, secrets);
     let text = value.to_string();
@@ -618,14 +629,21 @@ fn kept(value: &Value, secrets: &[String]) -> Value {
 }
 
 /// The arguments of a call for the journal: identifiers, numbers and switches; other texts are
-/// replaced by their kind.
+/// replaced by their kind, and the value of a secret field of every server by `***`.
 pub fn journal_detail(args: &Value) -> String {
+    detail_of(args, &[])
+}
+
+/// The arguments of a call for the journal and the line of the log, with the secret fields the
+/// sources name: the value of a secret field is never shown, whatever it looks like.
+fn detail_of(args: &Value, secrets: &[String]) -> String {
     let Some(map) = args.as_object() else {
         return String::new();
     };
     map.iter()
         .map(|(k, v)| {
             let shown = match v {
+                _ if is_secret(k, secrets) => "***".to_owned(),
                 Value::Bool(_) | Value::Number(_) => v.to_string(),
                 Value::String(s)
                     if s.len() <= 80

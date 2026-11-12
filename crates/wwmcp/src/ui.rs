@@ -50,7 +50,10 @@ pub struct Trial {
 pub struct McpPanel {
     /// The configuration file, saved at every change.
     pub path: PathBuf,
-    /// The configuration as last saved, so that a change is written once.
+    /// The configuration as last saved, so that a change is written once. None while the file
+    /// of `path` is one that did not read: nothing is written over it, whatever changes (a
+    /// token made at a start too), until the user saves the configuration under a name
+    /// (`save_as`) or opens another file.
     pub saved: Option<Config>,
     pub config: Config,
     /// The tools of the program and of its plugins, with the journal of their calls.
@@ -99,7 +102,7 @@ impl McpPanel {
                 }
                 Err(e) => {
                     panel.error = trf("The MCP configuration was not read: {e}", &[("e", &e)]);
-                    panel.saved = Some(panel.config.clone());
+                    panel.saved = None;
                 }
             }
         }
@@ -125,10 +128,16 @@ impl McpPanel {
         }
     }
 
-    /// Writes the configuration once it changed; a failure is shown once.
+    /// Writes the configuration once it changed; a failure is shown once. A file that did not
+    /// read is never written over: the configuration lives in the tab until it is saved under
+    /// a name.
     pub fn persist(&mut self) {
         self.sync();
-        if self.saved.as_ref() == Some(&self.config) {
+        if self
+            .saved
+            .as_ref()
+            .is_none_or(|saved| *saved == self.config)
+        {
             return;
         }
         if let Err(e) = self.config.save(&self.path) {
@@ -158,7 +167,10 @@ impl McpPanel {
             Ok(http) => {
                 let line = trf("The MCP server runs on {url}", &[("url", &http.url())]);
                 self.http = Some(http);
-                self.error.clear();
+                // The reason a file did not read stays shown while that file is not written.
+                if self.saved.is_some() {
+                    self.error.clear();
+                }
                 line
             }
             Err(e) => {
@@ -188,10 +200,14 @@ impl McpPanel {
         Ok(())
     }
 
-    /// Saves the configuration into another file, which the tab edits from then on.
+    /// Saves the configuration into another file, which the tab edits from then on. It is the
+    /// word of the user for a file that did not read: saved under its own name, it is replaced.
     pub fn save_as(&mut self, path: &Path) -> Result<(), String> {
         self.config.save(path)?;
         self.path = path.to_path_buf();
+        if self.saved.is_none() {
+            self.error.clear();
+        }
         self.saved = Some(self.config.clone());
         Ok(())
     }
@@ -974,10 +990,49 @@ mod tests {
         panel.persist();
         assert_eq!(Config::load(&path).unwrap().mode, Mode::Files);
         assert_eq!(server.config().mode, Mode::Files);
-        std::fs::write(&path, "{ not json").unwrap();
-        let broken = McpPanel::new(path.clone(), "demo", server);
-        assert!(!broken.error.is_empty());
-        assert!(broken.saved.is_some());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_file_that_did_not_read_is_not_written_over() {
+        let dir = std::env::temp_dir().join(format!("wwmcp-ui-unread-{}", std::process::id()));
+        let path = Config::default_path(&dir);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let broken = "{ not json: the work of the user";
+        std::fs::write(&path, broken).unwrap();
+        let server = Arc::new(Server::new(Info::default(), Config::default()));
+        let mut panel = McpPanel::new(path.clone(), "demo", server.clone());
+        assert!(!panel.error.is_empty());
+        assert!(panel.saved.is_none());
+        // A change of the tab and the token a start makes reach the server, never the file.
+        panel.config.mode = Mode::Edit;
+        panel.persist();
+        assert_eq!(server.config().mode, Mode::Edit);
+        panel.config.port = 0;
+        let line = panel.start();
+        assert!(panel.running(), "{line}");
+        assert!(!panel.config.token.is_empty());
+        panel.persist();
+        panel.stop();
+        panel.config.port = crate::config::DEFAULT_PORT;
+        panel.persist();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), broken);
+        assert!(!panel.error.is_empty(), "the reason stays shown");
+        // Saved under a name, the configuration is written there at every change from then on.
+        let named = dir.join("named.wwmcp");
+        panel.save_as(&named).unwrap();
+        assert!(panel.error.is_empty());
+        panel.config.mode = Mode::Files;
+        panel.persist();
+        assert_eq!(Config::load(&named).unwrap().mode, Mode::Files);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), broken);
+        // Another file opened is written as ever.
+        std::fs::write(&path, broken).unwrap();
+        let mut again = McpPanel::new(path.clone(), "demo", server);
+        again.open_config(&named).unwrap();
+        again.config.mode = Mode::Read;
+        again.persist();
+        assert_eq!(Config::load(&named).unwrap().mode, Mode::Read);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

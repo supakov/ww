@@ -178,8 +178,17 @@ storage of the page, and a download for a path under `ww_base::files::DOWNLOAD` 
 so code that saves a document by a path a dialog gave saves it in a browser too when its dialog
 gives such a path. Before the window starts, `ww::store::preload` reads `files.json` next to the
 page (a list of relative paths) and every file it names over http; the store, the file layer and
-the languages of `lang/` read them before the storage of the page. A page opened from `file://`
-reads none, and a browser lists no folder of a server, so the list is that file.
+the languages of `lang/` read them before the storage of the page, until the program writes a
+file of the same path: what it writes goes into the storage and is read from then on, in that
+visit of the page. The storage keeps texts: bytes that are no UTF-8 are refused by the file layer,
+never stored changed. A page opened from `file://` reads none, and a browser lists no folder of a
+server, so the list is that file.
+
+Natively `ww_base::files::write` (and `write_disk`, which `ww::store::write` and the
+configuration of the MCP server use) writes through a temporary neighbour of a name of its own,
+`<name>.<process>-<number>.tmp`, made anew, synced to the disk and renamed over the target; it is
+removed when the write fails, and no file of the user (`report.tmp` next to `report.json`) is
+taken for it.
 
 ## 6. Texts and translations
 

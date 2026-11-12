@@ -41,11 +41,13 @@ the plugin in C, and packs `dist\ww-demo\` and `dist\ww-demo-<version>.zip`: run
 `dist\ww-demo\ww-demo.exe`. Without the script:
 
 ```bash
-cargo build --release --workspace
-target/release/ww-demo.exe
+cargo run -p ww-demo
 ```
 
-The demo loads the native template from the folder of the build and opens its guide.
+A debug build loads the native template from the folder of the build and opens its guide. A
+release build (`cargo build --release --workspace`) takes its plugins from a folder `plugins`
+next to the executable, or from the folder the variable `WW_DEMO_PLUGINS` names, and from nowhere
+else: a DLL next to a released program is no plugin.
 
 ## A program on W#
 

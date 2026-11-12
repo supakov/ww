@@ -1,7 +1,7 @@
 # AGENTS.md: map of the repository of W#
 
 For agents and developers: where things are, the rules, the commands.
-Last update: 10.11.2026.
+Last update: 11.11.2026.
 
 Repository: https://github.com/supakov/ww (branch `main`). Commits are authored by
 `digidult <271767060+digidult@users.noreply.github.com>` (a local `git config` of the clone, never
@@ -51,7 +51,7 @@ demo program `ww-demo`, the native template `ww-hello`, the plugins of the stabl
    toolchain there without the word of the owner of that computer; the tests draw without a
    screen.
 9. The documents hold the current state; the history of the changes is in `docs/releases/`.
-10. Versions: `version` of the workspace (0.1.50 on 10.11.2026) grows with every pull request
+10. Versions: `version` of the workspace (0.1.51 on 11.11.2026) grows with every pull request
     that reaches `main`. An agent changes the third number alone; the first and the second
     change only on the word of the owner. `wwrt::plugin::ABI` names it. The interface of the
     plugins (`wwrt::plugin::API`, `WW_API_VERSION`) stays 1 until the first release; the crate
@@ -63,13 +63,16 @@ demo program `ww-demo`, the native template `ww-hello`, the plugins of the stabl
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
+# W# for the browser (rustup target add wasm32-unknown-unknown)
+cargo clippy -p ww --no-default-features --features glow --target wasm32-unknown-unknown -- -D warnings
 # the plugin of stable Rust, a workspace of its own
 (cd examples/ww-grey && cargo fmt --check && cargo clippy --all-targets -- -D warnings)
 ```
 
 On a computer of Windows, `build-all.cmd` of the root makes what CI makes: the release builds of
 the workspace and of `examples/ww-grey`, the plugin in C where a compiler of C is found, and
-`dist\ww-demo\` with `dist\ww-demo-<version>.zip`; `build-all.cmd check` runs the checks first.
+`dist\ww-demo\` with `dist\ww-demo-<version>.zip`; `build-all.cmd check` runs the checks above
+first, all of them.
 The tools come from `WW_CARGO`, `WW_PYTHON`, `WW_RUSTC` and `WW_CC`, else from the PATH. The file
 keeps CRLF (`.gitattributes`): cmd finds its labels by the offsets of the lines, so it is never
 edited while it runs.

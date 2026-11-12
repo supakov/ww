@@ -2,11 +2,14 @@
 //! day in the logs folder of the program, `mcp-<date>.jsonl`, apart from the log of the window:
 //! one JSON object a line (`time`, `level`, then `text` or the fields of an event) for the start
 //! and the stop of a transport, every call with its result and its time, the refusals and errors
-//! of the transports, and, when the configuration asks for the detailed log, every call and
-//! answer whole (`level` DETAIL). A panic is written before the process ends: into the MCP log
-//! from a thread of the server or a process that only serves MCP, into the log of the window
-//! (`<program>-<date>.log`) from any other thread; a program that catches the fatal exceptions of
-//! its system hands them to `fatal`. No token or password is ever written.
+//! of the transports, and, when the configuration asks for the detailed log, the arguments and
+//! the answer of every call (`level` DETAIL; long ones cut, and no more of them once the log of
+//! the day holds `DETAIL_DAY_LIMIT` bytes). A panic is written before the process ends: into the
+//! MCP log from a thread of the server or a process that only serves MCP, into the log of the
+//! window (`<program>-<date>.log`) from any other thread; a program that catches the fatal
+//! exceptions of its system hands them to `fatal`. No token or password is ever written: the
+//! server hides the secret fields of a call (`server::redact`) before a line reaches this
+//! module.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -32,6 +35,13 @@ static WRITING: Mutex<()> = Mutex::new(());
 
 /// The kind of the MCP log in the name of its file.
 const MCP: &str = "mcp";
+
+/// The size of the log of a day at which the details of the calls (`DETAIL`) stop for that
+/// day: the other lines (the calls, the refusals, the crashes) go on. A detailed log left on
+/// never fills the disk of its user.
+pub const DETAIL_DAY_LIMIT: u64 = 64 * 1024 * 1024;
+/// The file whose details stopped, so that the line that says so is written once.
+static DETAILS_STOPPED: Mutex<Option<PathBuf>> = Mutex::new(None);
 
 /// The file of the MCP log of today, once [`init`] ran.
 pub fn file_of_today() -> Option<PathBuf> {
@@ -106,6 +116,34 @@ pub fn event(level: &str, fields: Value) {
         let text = Value::Object(line).to_string();
         write_line(&t.dir.join(name(MCP)), &text, false);
     }
+}
+
+/// Appends the details of a call to the MCP log (`level` DETAIL), while the log of today is
+/// below `DETAIL_DAY_LIMIT`; nothing before [`init`].
+pub fn detail(fields: Value) {
+    if let Some(t) = TARGET.get()
+        && details_fit(&t.dir.join(name(MCP)), DETAIL_DAY_LIMIT)
+    {
+        event("DETAIL", fields);
+    }
+}
+
+/// Whether the log of a day still takes details: its file is below the limit. The first time
+/// it is not, one line says that the details stopped.
+fn details_fit(file: &Path, limit: u64) -> bool {
+    let size = std::fs::metadata(file).map_or(0, |m| m.len());
+    if size < limit {
+        return true;
+    }
+    let mut stopped = DETAILS_STOPPED.lock().unwrap_or_else(|e| e.into_inner());
+    if stopped.as_deref() != Some(file) {
+        *stopped = Some(file.to_path_buf());
+        let text = format!(
+            "the log of today holds {size} bytes: the details of the calls are written no more today (the limit is {limit} bytes); the calls and their results go on"
+        );
+        append(file, "WARN", &text, false);
+    }
+    false
 }
 
 /// Appends a line to the log of the window, for what fails before the window can write it.
@@ -238,6 +276,27 @@ mod tests {
         assert!(name("demo").ends_with(".log"));
         let text = formatted(&Path::new("logs").join(name("demo")), "WARN", "x");
         assert!(text.ends_with("[WARN] x"), "{text}");
+    }
+
+    #[test]
+    fn the_details_stop_at_the_limit_of_a_day_with_one_line() {
+        let dir = std::env::temp_dir().join(format!("wwmcp-log-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join(name(MCP));
+        assert!(details_fit(&file, 100), "no file yet");
+        std::fs::write(&file, "a line\n").unwrap();
+        assert!(details_fit(&file, 100));
+        std::fs::write(&file, format!("{}\n", "x".repeat(200))).unwrap();
+        assert!(!details_fit(&file, 100));
+        assert!(!details_fit(&file, 100));
+        let text = std::fs::read_to_string(&file).unwrap();
+        let said: Vec<&str> = text.lines().skip(1).collect();
+        assert_eq!(said.len(), 1, "one line says so: {text}");
+        let line: Value = serde_json::from_str(said[0]).unwrap();
+        assert_eq!(line["level"], "WARN");
+        let words = line["text"].as_str().unwrap();
+        assert!(words.contains("written no more today"), "{words}");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

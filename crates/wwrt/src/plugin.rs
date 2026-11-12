@@ -598,9 +598,7 @@ pub fn runtime() -> &'static str {
 /// A plugin of its DLL; this code runs in wwrt.dll, so `ABI` here is the build of that DLL.
 fn load(path: &Path) -> Result<Box<dyn Plugin>, String> {
     let _quiet = Quiet::new();
-    // SAFETY: loading a DLL runs its initialisation; the plugins come from the folder of the
-    // program, which its user fills as he fills the folder of the program itself.
-    let library = unsafe { libloading::Library::new(path) }.map_err(|e| {
+    let library = open_library(path)?.map_err(|e| {
         let mut text = e.to_string();
         if let Some(source) = std::error::Error::source(&e) {
             text = format!("{text}: {source}");
@@ -665,7 +663,11 @@ fn load(path: &Path) -> Result<Box<dyn Plugin>, String> {
         let abi = library
             .get::<extern "C" fn() -> *const u8>(b"ww_plugin_abi\0")
             .map_err(|e| format!("not a plugin of wwrt: {e}"))?;
-        CStr::from_ptr(abi().cast::<c_char>())
+        let text = abi();
+        if text.is_null() {
+            return Err("not a plugin of wwrt: ww_plugin_abi gave no text".to_owned());
+        }
+        CStr::from_ptr(text.cast::<c_char>())
             .to_string_lossy()
             .into_owned()
     };
@@ -686,6 +688,34 @@ fn load(path: &Path) -> Result<Box<dyn Plugin>, String> {
     // Never unloaded: the code and the tables of the plugin's traits live as long as its views.
     std::mem::forget(library);
     Ok(plugin)
+}
+
+/// Opens the DLL of a plugin. On Windows the DLLs it imports are searched in its own folder, in
+/// the folder of the program and in the system folder alone, never in the current folder or the
+/// PATH: the trust of a plugin (`crate::trust`) covers its DLL, so what it brings in comes from
+/// the places the user of the program fills. A DLL already in the process (wwrt, std) is found
+/// by its name wherever it is. The outer error is why the path has no absolute form, which the
+/// search in the folder of the DLL needs.
+fn open_library(path: &Path) -> Result<Result<libloading::Library, libloading::Error>, String> {
+    #[cfg(windows)]
+    {
+        use libloading::os::windows::{
+            LOAD_LIBRARY_SEARCH_APPLICATION_DIR, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR,
+            LOAD_LIBRARY_SEARCH_SYSTEM32, Library,
+        };
+        let path = std::path::absolute(path).map_err(|e| e.to_string())?;
+        let flags = LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR
+            | LOAD_LIBRARY_SEARCH_APPLICATION_DIR
+            | LOAD_LIBRARY_SEARCH_SYSTEM32;
+        // SAFETY: loading a DLL runs its initialisation; the plugins come from the folder of the
+        // program, which its user fills as he fills the folder of the program itself.
+        Ok(unsafe { Library::load_with_flags(&path, flags) }.map(Into::into))
+    }
+    #[cfg(not(windows))]
+    {
+        // SAFETY: as above.
+        Ok(unsafe { libloading::Library::new(path) })
+    }
 }
 
 /// No dialog of Windows while a plugin loads: a DLL that misses an import (one built against

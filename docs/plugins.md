@@ -165,6 +165,16 @@ a `Trust` admits: every one, or with `only_trusted` the ones whose SHA-256 it li
 `signed`, the ones whose signature Windows trusts; the others are not loaded, with their reason
 and their origin. A plugin has the rights of the program: it is native code in its process.
 
+The trust covers the DLL of the plugin, so what that DLL brings in comes from the places the user
+of the program fills: a plugin is loaded by its absolute path, and the DLLs it imports are
+searched in its own folder, in the folder of the program and in the system folder alone
+(`LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR`, `_APPLICATION_DIR`, `_SYSTEM32`), never in the current
+folder or the PATH. A DLL already in the process (`wwrt.dll`, `std-<hash>.dll`) is found by its
+name. A plugin that needs another DLL ships it next to itself or next to the program.
+
+A program whose settings are there and do not read knows nothing of what its user trusts: it
+loads no DLL then (the demo does so in `plugins_at_start`).
+
 ## 8. A host of plugins (`wwrt::host`)
 
 The parts every program with plugins has, for its `ww::App` to call:
@@ -181,8 +191,11 @@ The parts every program with plugins has, for its `ww::App` to call:
   the file with), `plugins_menu` (a submenu of each plugin that has items, the page of the
   plugins), `status_left`, `about_lines`, `settings_section` (the trust, the cache, the card of
   each plugin), `apply`.
-- For the command line: `attach_console`, `plugins_dir`, `list` (the text of `--plugins`) and
-  `probe` (a file opened and drawn in three frames without a window, with the times).
+- For the command line: `attach_console`, `plugins_dir` (the folder the environment variable
+  names, else `plugins` next to the executable; a debug build without that folder takes the
+  folder of the executable, where cargo writes every DLL of a workspace, a release build never
+  does), `list` (the text of `--plugins`) and `probe` (a file opened and drawn in three frames
+  without a window, with the times).
 - The MCP server (docs/mcp.md, section 8): `HostMcp` (the tab, the tools of the window, the
   program's tools, the ones of the plugins), `PluginApp::mcp`, `mcp_mut` and `program_tool`,
   `mcp_tab`, `serve_mcp` for `--mcp`.
@@ -200,7 +213,9 @@ its absolute path (docs/design.md, finding 12). So:
 
 - In this repository a plugin is a member of the workspace (`examples/ww-hello`): `cargo build
   --release` writes `target/release/<name>.dll` next to `ww-demo.exe` and `wwrt.dll`, and the demo
-  loads it from the folder `plugins` or, in a build of the workspace, from its own folder.
+  loads it from the folder `plugins` or, in a debug build of the workspace, from its own folder.
+  A release build started from `target/release` takes the folder `WW_DEMO_PLUGINS` names (that
+  folder itself, say) or a folder `plugins` made there: `build-all.cmd` makes `dist\ww-demo` so.
 - A program that takes W# as a git dependency publishes with each release the tree it was built
   in, W# and wwrt inside its root, with its `Cargo.lock`, its `.cargo/config.toml` and the
   version of its compiler in `rust-toolchain.toml`; a plugin of that program is a member of a copy

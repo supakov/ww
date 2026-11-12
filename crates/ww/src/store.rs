@@ -17,7 +17,8 @@ pub fn read(path: &Path, limit: u64) -> Result<Option<String>, String> {
 }
 
 /// Writes a text as the whole file. Natively the folder is made first and the text goes through
-/// a temporary neighbour that replaces the target, so a failed write leaves the old file whole.
+/// a temporary neighbour of a name of its own that replaces the target
+/// (`ww_base::files::write_disk`), so a failed write leaves the old file whole.
 pub fn write(path: &Path, text: &str) -> Result<(), String> {
     platform::write(path, text)
 }
@@ -93,14 +94,8 @@ mod platform {
     }
 
     pub fn write(path: &Path, text: &str) -> Result<(), String> {
-        if let Some(dir) = path.parent()
-            && !dir.as_os_str().is_empty()
-        {
-            std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-        }
-        let tmp = path.with_extension("tmp");
-        std::fs::write(&tmp, text).map_err(|e| format!("{}: {e}", tmp.display()))?;
-        std::fs::rename(&tmp, path).map_err(|e| format!("{}: {e}", path.display()))
+        ww_base::files::write_disk(path, text.as_bytes())
+            .map_err(|e| format!("{}: {e}", path.display()))
     }
 
     pub fn remove(path: &Path) {
@@ -247,7 +242,15 @@ mod platform {
                 return download(&name, bytes, "application/octet-stream")
                     .map_err(std::io::Error::other);
             }
-            write(path, &String::from_utf8_lossy(bytes)).map_err(std::io::Error::other)
+            // The storage of the page keeps texts: bytes that are no UTF-8 are refused, never
+            // stored with their wrong bytes replaced.
+            let text = std::str::from_utf8(bytes).map_err(|_| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "not UTF-8: the storage of the page keeps texts alone",
+                )
+            })?;
+            write(path, text).map_err(std::io::Error::other)
         }
 
         fn exists(&self, path: &Path) -> bool {
@@ -313,10 +316,17 @@ mod platform {
         }
     }
 
+    /// What is written wins over a file of the same path read over http: once the storage took
+    /// the text, the copy in memory goes, so the next read gives what was saved.
     pub fn write(path: &Path, text: &str) -> Result<(), String> {
+        let key = key(path);
         storage()?
-            .set_item(&key(path), text)
-            .map_err(|_| format!("{}: the storage of the page refused it", path.display()))
+            .set_item(&key, text)
+            .map_err(|_| format!("{}: the storage of the page refused it", path.display()))?;
+        if let Ok(mut overlay) = OVERLAY.write() {
+            overlay.remove(&key);
+        }
+        Ok(())
     }
 
     pub fn remove(path: &Path) {

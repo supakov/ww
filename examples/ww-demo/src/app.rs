@@ -295,6 +295,20 @@ pub fn plugins_of(dir: &Path, settings: &PluginSettings) -> Plugins {
     plugins
 }
 
+/// The plugins of a start. The settings name what the user trusts: when their file is there
+/// and did not read (`None`), nothing is known of it, so no DLL of the folder is loaded and
+/// the program has the two plugins it makes itself.
+pub fn plugins_at_start(dir: &Path, settings: Option<&PluginSettings>) -> Plugins {
+    match settings {
+        Some(settings) => plugins_of(dir, settings),
+        None => {
+            let mut plugins = Plugins::default();
+            own_plugins(&mut plugins);
+            plugins
+        }
+    }
+}
+
 /// The plugins the program makes itself, after the ones of the folder.
 pub fn own_plugins(plugins: &mut Plugins) {
     plugins.add(PathBuf::from("bundles"), Box::new(BundlePlugin));

@@ -13,6 +13,10 @@ on:
         type: boolean
         default: true
 
+# The token of a run reads the repository and nothing else: no job writes to it.
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true

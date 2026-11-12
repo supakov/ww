@@ -421,17 +421,25 @@ impl SourceBox {
     }
 }
 
+/// Runs the part of a function of the host a plugin called that is code of Rust which may fail
+/// (a panic of a tool, of the cache, of a file): the failure gives `failed` and never leaves
+/// the function, since a panic that crosses into the code of the plugin ends the program. The
+/// panic hook has written the details.
+fn guarded<T>(failed: T, run: impl FnOnce() -> T) -> T {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(run)).unwrap_or(failed)
+}
+
 unsafe extern "C" fn source_read(this: *mut c_void, offset: u64, out: *mut u8, count: u32) -> u32 {
     if this.is_null() || out.is_null() {
         return 0;
     }
     // SAFETY: `self` of a source is its box, alive while the plugin may read it; `out` is a
     // buffer of `count` bytes of the plugin.
-    unsafe {
+    guarded(0, || unsafe {
         let source = &*this.cast::<SourceBox>();
         let out = std::slice::from_raw_parts_mut(out, count as usize);
         source.file.read_at(offset, out).unwrap_or(0) as u32
-    }
+    })
 }
 
 unsafe extern "C" fn host_open_file(
@@ -441,7 +449,10 @@ unsafe extern "C" fn host_open_file(
 ) -> *const WwSource {
     // SAFETY: the plugin gives a path that ends with a zero.
     let path = unsafe { text(path) };
-    match BlockFile::open(Path::new(&path)) {
+    let opened = guarded(Err("the file was not opened".to_owned()), || {
+        BlockFile::open(Path::new(&path)).map_err(|e| e.to_string())
+    });
+    match opened {
         Ok(file) => SourceBox::make(file, false).cast_const().cast(),
         Err(e) => {
             // SAFETY: the plugin gives a buffer of `size` bytes.
@@ -461,9 +472,11 @@ unsafe extern "C" fn host_slice(
     }
     // SAFETY: a source of this host is the first field of its box.
     let source = unsafe { &*source.cast::<SourceBox>() };
-    SourceBox::make(source.file.slice(offset, length), false)
-        .cast_const()
-        .cast()
+    guarded(std::ptr::null(), || {
+        SourceBox::make(source.file.slice(offset, length), false)
+            .cast_const()
+            .cast()
+    })
 }
 
 unsafe extern "C" fn host_close_source(source: *const WwSource) {
@@ -484,7 +497,10 @@ unsafe extern "C" fn host_cache(out: *mut WwCache) {
     if out.is_null() {
         return;
     }
-    let state = blocks::cache().state();
+    // A cache that fails leaves the structure of the plugin as it was.
+    let Some(state) = guarded(None, || Some(blocks::cache().state())) else {
+        return;
+    };
     let written = WwCache {
         size: 0,
         block: state.limits.block as u32,
@@ -585,7 +601,20 @@ unsafe extern "C" fn host_call_tool(
         serde_json::from_str::<Value>(&args)
             .map_err(|e| ToolError::new(Kind::Invalid, format!("the arguments are not JSON: {e}")))
     };
-    let outcome = args.and_then(|args| crate::tools::call(&name, &args, &id));
+    // A tool is code of the program or of another plugin: one that fails inside (a panic) is a
+    // failed call for this plugin, not the end of the program.
+    let failed = || {
+        Err(ToolError::new(
+            Kind::Failed,
+            format!("the tool {name} failed inside the program"),
+        ))
+    };
+    let outcome = args.and_then(|args| {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            crate::tools::call(&name, &args, &id)
+        }))
+        .unwrap_or_else(|_| failed())
+    });
     let (code, text) = match outcome {
         Ok(value) => (0, value.to_string()),
         Err(e) => (e.kind.code(), e.message),
@@ -831,8 +860,10 @@ impl Stable {
     }
 }
 
-// SAFETY: the table and its texts are the static data of a DLL never unloaded, only read; the
-// functions of the plugin are called from the thread of the window alone, as the header says.
+// SAFETY: the table and its texts are the static data of a DLL never unloaded, only read. The
+// functions of its views are called from the thread of the window alone; the call of a tool
+// comes from any thread of the host, several at once, which the header tells the plugin
+// (ww.h: "the call of a tool, which any thread of the host makes, several at once").
 unsafe impl Send for Stable {}
 // SAFETY: as for Send.
 unsafe impl Sync for Stable {}
@@ -858,6 +889,7 @@ impl Stable {
             source,
             texture: None,
             size: [0, 0],
+            refused: false,
             controls: Vec::new(),
             keys: 0,
             cursor: 0,
@@ -999,6 +1031,22 @@ struct Control {
     choices: Vec<String>,
 }
 
+/// The most bytes of the picture of a frame (RGBA): 8192 x 8192 pixels. A picture beyond it, or
+/// with a side longer than the renderer takes for a texture, is refused: a plugin that names a
+/// huge size makes the host allocate neither its copy nor a texture the graphics card refuses.
+const PICTURE_BUDGET: u64 = 256 << 20;
+
+/// Whether the host takes a picture of this size from a plugin: each side within the longest
+/// side of a texture (`most_side`, of the renderer), the whole within `PICTURE_BUDGET`.
+fn picture_fits(width: u32, height: u32, most_side: usize) -> bool {
+    let side = u64::try_from(most_side).unwrap_or(u64::MAX);
+    // The pixels of two sides of 32 bits fit 64 bits; their bytes may not, so the pixels are
+    // counted against the budget of the pixels.
+    u64::from(width) <= side
+        && u64::from(height) <= side
+        && u64::from(width) * u64::from(height) <= PICTURE_BUDGET / 4
+}
+
 pub struct StableView {
     table: &'static WwPlugin,
     view: *mut c_void,
@@ -1007,6 +1055,8 @@ pub struct StableView {
     texture: Option<egui::TextureHandle>,
     /// The size of the picture of the texture, in pixels.
     size: [u32; 2],
+    /// A picture of the plugin was refused for its size: the log says so once a view.
+    refused: bool,
     controls: Vec<Control>,
     keys: u32,
     cursor: u32,
@@ -1085,7 +1135,17 @@ impl StableView {
         // lives until its next call.
         unsafe {
             let (w, h) = (out.width, out.height);
-            if out.changed != 0 && !out.pixels.is_null() && w > 0 && h > 0 {
+            let new = out.changed != 0 && !out.pixels.is_null() && w > 0 && h > 0;
+            let fits = picture_fits(w, h, ctx.input(|i| i.max_texture_side));
+            if new && !fits && !self.refused {
+                // The last picture stays; the rest of the output is taken as ever.
+                self.refused = true;
+                wwmcp::log::window_line(
+                    "WARN",
+                    &format!("a picture of {w} x {h} pixels of a plugin was refused: too large"),
+                );
+            }
+            if new && fits {
                 let stride = (out.stride as usize).max(w as usize * 4);
                 let mut rgba = Vec::with_capacity(w as usize * h as usize * 4);
                 for row in 0..h as usize {

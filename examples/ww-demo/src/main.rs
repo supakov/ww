@@ -55,15 +55,25 @@ fn main() -> ExitCode {
     }
     let dir = host::plugins_dir("WW_DEMO_PLUGINS");
     // The plugins it trusts and the limits of the cache are in the settings, read before any
-    // plugin loads.
+    // plugin loads. Settings that are there and do not read say nothing of what the user
+    // trusts: no DLL of the folder is loaded then (a missing file is the defaults, which read).
     let (settings, _) = wwrt::ww::Settings::<app::Extra>::load(<app::Demo as wwrt::ww::App>::NAME);
-    let own = settings.map(|s| s.extra.host).unwrap_or_default();
+    let unread = settings.as_ref().err().map(|why| {
+        format!("the settings were not read ({why}): no DLL of the folder of the plugins is loaded")
+    });
+    if let Some(why) = &unread {
+        wwrt::wwmcp::log::window_line("WARN", why);
+    }
+    let own = settings.ok().map(|s| s.extra.host);
     let started = Instant::now();
-    let plugins = app::plugins_of(&dir, &own);
+    let plugins = app::plugins_at_start(&dir, own.as_ref());
     let took = started.elapsed();
     match first {
         Some("--plugins") => {
             attach_console();
+            if let Some(why) = &unread {
+                println!("{why}\n");
+            }
             println!("{}", host::list(&plugins, &dir, took));
             ExitCode::SUCCESS
         }

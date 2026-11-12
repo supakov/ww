@@ -311,3 +311,18 @@ fn the_tools_of_the_window_answer_a_client() {
         Some(Doc::Host(HostDoc::Mcp(_)))
     ));
 }
+
+#[test]
+fn settings_that_did_not_read_load_no_dll() {
+    use wwrt::host::PluginSettings;
+
+    let dir = folder("unread");
+    std::fs::write(dir.join("other.dll"), b"no plugin").unwrap();
+    // Settings that read (the defaults trust every DLL): the DLL of the folder is tried.
+    let read = crate::app::plugins_at_start(&dir, Some(&PluginSettings::default()));
+    assert_eq!((read.loaded.len(), read.failed.len()), (2, 1));
+    // Settings that did not read: the folder is not looked at, the program's own plugins stay.
+    let unread = crate::app::plugins_at_start(&dir, None);
+    assert_eq!((unread.loaded.len(), unread.failed.len()), (2, 0));
+    let _ = std::fs::remove_dir_all(&dir);
+}

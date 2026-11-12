@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
+use crate::config::TOKEN_MIN;
 use crate::server::MAX_MESSAGE;
 use crate::{Server, log};
 
@@ -25,8 +26,20 @@ pub struct HttpServer {
 }
 
 impl HttpServer {
-    /// Starts listening on 127.0.0.1 and the port (0: any free port).
+    /// Starts listening on 127.0.0.1 and the port (0: any free port). The token is what every
+    /// request must bear: one shorter than `TOKEN_MIN` (an empty one is no authentication at
+    /// all) is refused with `InvalidInput`, and nothing listens.
     pub fn start(server: Arc<Server>, port: u16, token: String) -> io::Result<Self> {
+        if token.len() < TOKEN_MIN {
+            log::line(
+                "ERROR",
+                &format!("the HTTP server did not start: its token is shorter than {TOKEN_MIN}"),
+            );
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("the token of the HTTP server has at least {TOKEN_MIN} characters"),
+            ));
+        }
         let listener = TcpListener::bind(("127.0.0.1", port)).inspect_err(|e| {
             log::line(
                 "ERROR",
@@ -323,5 +336,23 @@ mod tests {
         assert!(
             loopback("http://127.0.0.1:8765", 8765, true) && !loopback("https://x", 8765, true)
         );
+    }
+
+    #[test]
+    fn a_short_token_starts_no_server() {
+        let server = || {
+            Arc::new(Server::new(
+                crate::Info::default(),
+                crate::Config::default(),
+            ))
+        };
+        for token in [String::new(), "a".repeat(TOKEN_MIN - 1)] {
+            let Err(refused) = HttpServer::start(server(), 0, token) else {
+                panic!("a server started with a short token");
+            };
+            assert_eq!(refused.kind(), io::ErrorKind::InvalidInput);
+        }
+        let started = HttpServer::start(server(), 0, "a".repeat(TOKEN_MIN)).unwrap();
+        assert!(started.port != 0 && started.url().ends_with("/mcp"));
     }
 }

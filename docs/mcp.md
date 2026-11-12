@@ -18,7 +18,7 @@ A source of tools (`wwmcp::Source`) is the program or a plugin. It names:
 | its options | `Choice`: a choice of named values, the weakest first (`off`, `read`, `write`), or a text; a title and a help line for the tab |
 | its resources | `ResourceDef` and `Source::read` |
 | what it tells the client first | `Source::instructions` |
-| the fields whose values never reach the journal | `Source::secrets`, beyond `password`, `token`, `authorization` and `secret` |
+| the fields whose values never reach the journal | `Source::secrets` (their names, whatever the case of the letters), beyond every field whose name holds `password`, `token`, `authorization` or `secret` (`new_password`, `api_token`) |
 
 The modes are `read` (nothing changes), `edit` (what the program holds changes in memory) and
 `files` (files are written too); the server runs in one of them, and a tool of a higher mode is
@@ -35,9 +35,10 @@ its source and whether it is on (the first of a name; a later one of the same na
 tool by its name. A caller other than the program (`Caller::Client`, `Caller::Plugin(id)`) meets
 the switches of the configuration (a tool, a group or a source off is not found), the mode and
 the options the tool needs; the program (`Caller::Program`: a command, a script, the call by hand
-of the tab) calls what its user asked for. Every call goes into the journal (the last 500, the
-arguments that are identifiers, numbers or switches shown, the whole arguments and the answer
-without the secret fields) and into the log.
+of the tab) calls what its user asked for. Every call goes into the journal (the last 500: the
+arguments that are identifiers, numbers or switches shown in its line, a secret field as `***`
+whatever its value looks like; the arguments and the answer without the secret fields, each cut
+to its first 16 KB) and into the log.
 
 This is the door of a scripting language to come: a script calls the tools of the program and of
 its plugins by their names, as an agent does.
@@ -45,7 +46,8 @@ its plugins by their names, as an agent does.
 ## 3. The configuration file `.wwmcp`
 
 `mcp/default.wwmcp` next to the executable, or a file named on the command line; the tab saves it
-at every change and writes no file until the first one.
+at every change and writes no file until the first one. A save goes through a temporary neighbour
+that replaces the file (`ww_base::files::write`), so a save that fails leaves the old file whole.
 
 ```json
 {
@@ -71,14 +73,19 @@ The branch `plugins` holds the settings of every source by its id, the program a
 for the whole source, `tools_off` and `groups_off` by name, `options` by key (a value that is not
 one of the option's is taken as its default; an option not named has its default). A source the
 file does not name has everything on. The file is read strictly: an unknown field or a wrong
-value is an error, and a file that cannot be read is not written over.
+value is an error, and a file that cannot be read is not written over: the tab shows the reason
+and works with the defaults in memory (a change, the token a start makes) until the user saves
+the configuration under a name (**Save as**, the same name too) or opens another file.
 
 ## 4. Transports and the command line
 
 - HTTP on 127.0.0.1: `POST /mcp` with `Authorization: Bearer <token>` (32 letters and digits or
   more), the Host and the Origin of the loopback only (no web page reaches it), 8 connections,
-  4 MB a message. The tab starts it with the window.
-- stdio: a message a line, for a client that starts the program itself.
+  4 MB a message. The tab starts it with the window. `HttpServer::start` itself refuses a token
+  shorter than 32 characters (`InvalidInput`), an empty one too: nothing listens without one.
+- stdio: a message a line, for a client that starts the program itself. A line longer than 4 MB
+  is not read whole and a line that is not UTF-8 is no message: each gets an error answer
+  (-32600, -32700) and the server goes on with the next line.
 
 `wwmcp::cli` starts a server without the window: `PROGRAM --mcp FILE|stdio|http`, with
 `--config FILE`, `--mode`, `--port`, `--token`, `--detailed-log`, `--off SOURCE[/TOOL]`,
@@ -90,8 +97,11 @@ the help of a program. `wwrt::host::serve_mcp` does it for a program with plugin
 
 `wwmcp::log::init(dir, program, headless)` sets the folder of the logs and the panic hook. The
 server writes `mcp-<date>.jsonl`, a JSON object a line: the start and the stop of a transport,
-every call with its result and its time, the refusals; with `detailed_log` every call and answer
-whole (`level` DETAIL, the secret fields left out). A panic of a thread of the server or of a
+every call with its result and its time, the refusals; with `detailed_log` the arguments and the
+answer of every call (`level` DETAIL, the secret fields left out, each cut to its first 16 KB as
+in the journal). The details stop for the day once its file holds 64 MB
+(`log::DETAIL_DAY_LIMIT`), with one line that says so; the other lines go on. The line of a call
+shows a secret argument as `***`. A panic of a thread of the server or of a
 process that only serves MCP goes there too; `log::fatal` writes an exception of the system the
 program catches. The tab has **Open the log**, which opens it as a file of the program: in a host
 of plugins, a plugin of JSON Lines shows it as the list of its lines.
@@ -118,9 +128,11 @@ the program), `close_file` (edit: a tab by its number from 1 or its title; one w
 unless `discard` is true) and `save_file` (files: a tab that has a file). `ProgramTools` adds the
 program's own tools that act on its state (the demo: `new_note`). A call comes on a thread of the
 server and waits while the window answers it at its next frame (`wwmcp::window::answer`, which a
-program calls in `App::draw`; `wwrt::host::draw` does it); the window wakes for it. A call from
-the thread of the window itself is refused, so the call by hand of the tab runs on a thread of
-its own.
+program calls in `App::draw`; `wwrt::host::draw` does it); the window wakes for it. A call the
+window did not take in 30 seconds (it stood in a dialog) fails and is never run later: what was
+reported as failed does not happen. One the window is already working on has 30 seconds more.
+A call from the thread of the window itself is refused, so the call by hand of the tab runs on a
+thread of its own.
 
 ## 8. A program with plugins (`wwrt::host`)
 
@@ -155,5 +167,6 @@ opened through `call_tool`; the option `limit` caps the iterations) and `ww-grey
 Nothing reaches the server but the loopback with the token, or the process that started the
 program (stdio). Every start is in the mode of its configuration (`read` by default); the user
 turns tools and sources off and sets the options in the tab. Passwords, tokens and the secret
-fields of the sources never reach the journal or the log; the configurations copied for clients
-hold the token, and the clipboard history of Windows keeps what is copied.
+fields of the sources never reach the journal or the log, neither in the arguments and the
+answer kept nor in the line of a call; the configurations copied for clients hold the token, and
+the clipboard history of Windows keeps what is copied.
